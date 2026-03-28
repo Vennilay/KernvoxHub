@@ -1,0 +1,98 @@
+services:
+  backend:
+    build: ./backend
+    container_name: kernvox-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
+      - REDIS_URL=redis://redis:6379/0
+      - API_SECRET=${API_SECRET}
+      - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - kernvox-network
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: kernvox-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=kernvox
+      - POSTGRES_USER=kernvox
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kernvox -d kernvox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kernvox-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: kernvox-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - kernvox-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: kernvox-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_data:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    depends_on:
+      - backend
+    networks:
+      - kernvox-network
+
+  certbot:
+    image: certbot/certbot
+    container_name: kernvox-certbot
+    volumes:
+      - certbot_data:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - kernvox-network
+
+  collector:
+    build: ./backend
+    container_name: kernvox-collector
+    restart: unless-stopped
+    command: python -m collector.scheduler
+    environment:
+      - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
+      - REDIS_URL=redis://redis:6379/0
+      - API_SECRET=${API_SECRET}
+      - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - kernvox-network
+
+networks:
+  kernvox-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  certbot_data:
