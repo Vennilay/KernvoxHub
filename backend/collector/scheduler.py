@@ -16,19 +16,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def collect_metrics(server_id: int, host: str, port: int, username: str,
-                    password: str = None, ssh_key: str = None) -> None:
+def collect_metrics(server_id: int) -> None:
+    """Сбор метрик с одного сервера."""
     db: Session = SessionLocal()
     try:
-        logger.info(f"Collecting metrics from server {server_id} ({host})")
+        server = db.query(Server).filter(Server.id == server_id).first()
+        if not server:
+            logger.warning(f"Server {server_id} not found in database")
+            return
 
-        with SSHClient(host, port, username, password, ssh_key) as ssh:
-            if not ssh.client:
+        logger.info(f"Collecting metrics from server {server_id} ({server.host})")
+
+        ssh = SSHClient(
+            host=server.host,
+            port=server.port,
+            username=server.username,
+            password=server.password,
+            ssh_key=server.ssh_key,
+        )
+
+        try:
+            if not ssh.connect(server=server, db=db, timeout=10):
                 logger.error(f"Failed to connect to server {server_id}")
                 metric = Metric(
                     server_id=server_id,
                     is_available=False,
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(timezone.utc),
                 )
                 db.add(metric)
                 db.commit()
@@ -49,13 +62,19 @@ def collect_metrics(server_id: int, host: str, port: int, username: str,
                     network_tx_bytes=metrics_data.get("network_tx_bytes", 0.0),
                     uptime_seconds=metrics_data.get("uptime_seconds", 0.0),
                     is_available=metrics_data.get("is_available", True),
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(timezone.utc),
                 )
                 db.add(metric)
                 db.commit()
-                logger.info(f"Metrics collected from server {server_id}: CPU={metrics_data.get('cpu_percent')}%")
+                logger.info(
+                    f"Metrics collected from server {server_id}: "
+                    f"CPU={metrics_data.get('cpu_percent')}%"
+                )
             else:
                 logger.error(f"Failed to fetch metrics from server {server_id}")
+
+        finally:
+            ssh.close()
 
     except Exception as e:
         logger.error(f"Error collecting metrics from server {server_id}: {e}")
@@ -77,11 +96,10 @@ def run_scheduler(interval: int = 60) -> None:
                 collect_metrics,
                 'interval',
                 seconds=interval,
-                args=[server.id, server.host, server.port, server.username,
-                      server.password, server.ssh_key],
+                args=[server.id],
                 id=f"server_{server.id}",
                 name=f"Collect metrics from {server.name}",
-                next_run_time=datetime.now(timezone.utc)
+                next_run_time=datetime.now(timezone.utc),
             )
             logger.info(f"Scheduled collection for server {server.name} (ID: {server.id})")
 

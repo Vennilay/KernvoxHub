@@ -7,6 +7,7 @@ services:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
       - REDIS_URL=redis://redis:6379/0
       - API_SECRET=${API_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
     depends_on:
       postgres:
@@ -79,6 +80,7 @@ services:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
       - REDIS_URL=redis://redis:6379/0
       - API_SECRET=${API_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
     depends_on:
       postgres:

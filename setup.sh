@@ -71,6 +71,17 @@ if [ -z "$API_SECRET" ]; then
     echo "✅ Сгенерирован API Secret: $API_SECRET"
 fi
 
+# Генерация ENCRYPTION_KEY (Fernet key)
+ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null)
+if [ -z "$ENCRYPTION_KEY" ]; then
+    # Fallback: генерируем через openssl + base64 (Fernet key = 32 random bytes, base64)
+    ENCRYPTION_KEY=$(openssl rand -base64 32 | head -c 44)
+    ENCRYPTION_KEY="${ENCRYPTION_KEY}="
+    echo "⚠️  ENCRYPTION_KEY сгенерирован через openssl (убедитесь, что cryptography установлен)"
+else
+    echo "✅ Сгенерирован ENCRYPTION_KEY"
+fi
+
 echo ""
 
 # Создание .env файла
@@ -79,6 +90,7 @@ echo "📝 Создание файла окружения..."
 cat > .env << EOF
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 API_SECRET=$API_SECRET
+ENCRYPTION_KEY=$ENCRYPTION_KEY
 COLLECTOR_INTERVAL=$INTERVAL
 DOMAIN=$DOMAIN
 EMAIL=$EMAIL
@@ -114,6 +126,9 @@ echo "   $API_SECRET"
 echo ""
 echo "🔑 PostgreSQL пароль:"
 echo "   $POSTGRES_PASSWORD"
+echo ""
+echo "🔐 ENCRYPTION_KEY (сохраните!):"
+echo "   $ENCRYPTION_KEY"
 echo ""
 echo "Пример запроса к API:"
 echo "  curl -H \"X-API-Key: kvx_${API_SECRET:0:16}...\" http://${DOMAIN}/api/v1/health"
