@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.sql import func
 
 from models.database import Base
@@ -14,9 +14,10 @@ class Server(Base):
     port = Column(Integer, default=22)
     username = Column(String(100), nullable=False)
 
-    # Зашифрованные колонки (в БД хранятся только ciphertext)
+    # Зашифрованные чувствительные поля
     _password_encrypted = Column("password", String, nullable=True)
     _ssh_key_encrypted = Column("ssh_key", String, nullable=True)
+    _host_key_encrypted = Column("host_key", Text, nullable=True)
 
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -45,6 +46,16 @@ class Server(Base):
     def ssh_key(self, plain_text: str | None) -> None:
         """Шифрует и сохраняет SSH-ключ."""
         self._ssh_key_encrypted = encrypt_value(plain_text)
+
+    @property
+    def host_key(self) -> str | None:
+        """Возвращает расшифрованный host key сервера."""
+        return decrypt_value(self._host_key_encrypted)
+
+    @host_key.setter
+    def host_key(self, plain_text: str | None) -> None:
+        """Шифрует и сохраняет host key."""
+        self._host_key_encrypted = encrypt_value(plain_text)
 
     # ------------------------------------------------------------------
 

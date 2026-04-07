@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
 from datetime import datetime, timezone
+import logging
 
 from models.database import get_db
 from models.server import Server
@@ -14,7 +15,7 @@ from schemas.android import (
     ServerProcesses,
     ProcessInfo
 )
-from collector.ssh_client import SSHClient
+from collector.ssh_client import SSHClient, HostKeyMismatchError
 from collector.metrics_fetcher import MetricsFetcher
 
 router = APIRouter(prefix="/api/v1/android", tags=["android"])
@@ -110,35 +111,39 @@ def get_server_details(server_id: int, db: Session = Depends(get_db)) -> ServerD
 def get_server_processes(
     server_id: int,
     limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> ServerProcesses:
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
+
     ssh = SSHClient(
         host=server.host,
         port=server.port,
         username=server.username,
         password=server.password,
-        ssh_key=server.ssh_key
+        ssh_key=server.ssh_key,
     )
-    
-    if not ssh.connect(timeout=10):
-        raise HTTPException(status_code=503, detail="Cannot connect to server")
-    
+
+    try:
+        if not ssh.connect(server=server, db=db, timeout=10):
+            raise HTTPException(status_code=503, detail="Cannot connect to server")
+    except HostKeyMismatchError as e:
+        logging.getLogger(__name__).critical(str(e))
+        raise HTTPException(status_code=503, detail="Host key verification failed")
+
     try:
         fetcher = MetricsFetcher(ssh)
         processes_data = fetcher.get_processes(limit=limit)
 
         processes = [ProcessInfo(**p) for p in processes_data]
-        
+
         return ServerProcesses(
             server_id=server_id,
             server_name=server.name,
             processes=processes,
             total_processes=len(processes),
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(timezone.utc),
         )
     finally:
         ssh.close()
