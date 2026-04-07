@@ -18,10 +18,8 @@ echo "✅ Docker: $(docker --version)"
 
 COMPOSE_CMD=""
 
-# Проверяем docker compose (v2)
 if docker compose version &> /dev/null; then
     COMPOSE_CMD="docker compose"
-# Проверяем docker-compose (v1)
 elif command -v docker-compose &> /dev/null; then
     COMPOSE_CMD="docker-compose"
 fi
@@ -74,13 +72,28 @@ fi
 # Генерация ENCRYPTION_KEY (Fernet key)
 ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null)
 if [ -z "$ENCRYPTION_KEY" ]; then
-    # Fallback: генерируем через openssl + base64 (Fernet key = 32 random bytes, base64)
     ENCRYPTION_KEY=$(openssl rand -base64 32 | head -c 44)
     ENCRYPTION_KEY="${ENCRYPTION_KEY}="
-    echo "⚠️  ENCRYPTION_KEY сгенерирован через openssl (убедитесь, что cryptography установлен)"
+    echo "⚠️  ENCRYPTION_KEY сгенерирован через openssl"
 else
     echo "✅ Сгенерирован ENCRYPTION_KEY"
 fi
+
+# Генерация REDIS_PASSWORD
+REDIS_PASSWORD=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
+echo "✅ Сгенерирован REDIS_PASSWORD"
+
+# Генерация INTERNAL_API_KEY
+INTERNAL_API_KEY=$(openssl rand -hex 32)
+echo "✅ Сгенерирован INTERNAL_API_KEY"
+
+# CORS — для localhost оставляем *, для домена — конкретный
+if [ "$DOMAIN" == "localhost" ] || [ "$DOMAIN" == "127.0.0.1" ]; then
+    CORS_ORIGINS="*"
+else
+    CORS_ORIGINS="https://${DOMAIN}"
+fi
+echo "✅ CORS origins: $CORS_ORIGINS"
 
 echo ""
 
@@ -91,6 +104,9 @@ cat > .env << EOF
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 API_SECRET=$API_SECRET
 ENCRYPTION_KEY=$ENCRYPTION_KEY
+REDIS_PASSWORD=$REDIS_PASSWORD
+INTERNAL_API_KEY=$INTERNAL_API_KEY
+CORS_ORIGINS=$CORS_ORIGINS
 COLLECTOR_INTERVAL=$INTERVAL
 DOMAIN=$DOMAIN
 EMAIL=$EMAIL
@@ -129,6 +145,12 @@ echo "   $POSTGRES_PASSWORD"
 echo ""
 echo "🔐 ENCRYPTION_KEY (сохраните!):"
 echo "   $ENCRYPTION_KEY"
+echo ""
+echo "🔐 REDIS_PASSWORD (сохраните!):"
+echo "   $REDIS_PASSWORD"
+echo ""
+echo "🔐 INTERNAL_API_KEY (для POST /metrics):"
+echo "   $INTERNAL_API_KEY"
 echo ""
 echo "Пример запроса к API:"
 echo "  curl -H \"X-API-Key: kvx_${API_SECRET:0:16}...\" http://${DOMAIN}/api/v1/health"

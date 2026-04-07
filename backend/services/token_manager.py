@@ -1,4 +1,3 @@
-import os
 import logging
 
 from services.redis_client import redis_client
@@ -8,11 +7,20 @@ logger = logging.getLogger(__name__)
 VALID_API_KEY = None
 
 
+def _build_api_key(api_secret: str) -> str:
+    return f"kvx_{api_secret[:32]}"
+
+
 def get_valid_api_key() -> str:
     global VALID_API_KEY
     if VALID_API_KEY is None:
-        api_secret = os.environ.get('API_SECRET', 'dev_secret')
-        VALID_API_KEY = f"kvx_{api_secret[:32]}"
+        from config import settings
+        if not settings.API_SECRET:
+            raise RuntimeError(
+                "API_SECRET is not set. Generate one with: "
+                "openssl rand -hex 32"
+            )
+        VALID_API_KEY = _build_api_key(settings.API_SECRET)
     return VALID_API_KEY
 
 

@@ -5,9 +5,12 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_dev_password}@redis:6379/0
       - API_SECRET=${API_SECRET}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis_dev_password}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-}
       - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
     depends_on:
       postgres:
@@ -40,6 +43,7 @@ services:
     image: redis:7-alpine
     container_name: kernvox-redis
     restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_dev_password}
     volumes:
       - redis_data:/data
     networks:
@@ -78,8 +82,9 @@ services:
     command: python -m collector.scheduler
     environment:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_dev_password}@redis:6379/0
       - API_SECRET=${API_SECRET}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis_dev_password}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-60}
     depends_on:

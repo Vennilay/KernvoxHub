@@ -6,9 +6,18 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from cryptography.fernet import Fernet
 
-# Генерируем тестовый ключ ДО импорта settings (config.py)
+# Генерируем тестовые ключи ДО импорта settings (config.py)
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
+_TEST_API_SECRET = "test_api_secret_for_development"
+_TEST_REDIS_PASSWORD = "test_redis_password"
+
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_ENCRYPTION_KEY)
+os.environ.setdefault("API_SECRET", _TEST_API_SECRET)
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("REDIS_PASSWORD", _TEST_REDIS_PASSWORD)
+os.environ.setdefault("CORS_ORIGINS", "*")
+os.environ.setdefault("INTERNAL_API_KEY", "")
 
 from main import app
 from models.database import Base, get_db

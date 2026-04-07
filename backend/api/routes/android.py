@@ -4,6 +4,7 @@ from sqlalchemy import desc
 from typing import Optional
 from datetime import datetime, timezone
 import logging
+import asyncio
 
 from models.database import get_db
 from models.server import Server
@@ -18,17 +19,46 @@ from schemas.android import (
 from collector.ssh_client import SSHClient, HostKeyMismatchError
 from collector.metrics_fetcher import MetricsFetcher
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/android", tags=["android"])
+
+
+def _connect_and_fetch(
+    host: str, port: int, username: str, password: Optional[str],
+    ssh_key: Optional[str], server_obj, db_session, limit: int,
+):
+    """Синхронная функция для запуска в executor (блокирующий SSH)."""
+    ssh = SSHClient(
+        host=host, port=port, username=username,
+        password=password, ssh_key=ssh_key,
+    )
+
+    try:
+        if not ssh.connect(server=server_obj, db=db_session, timeout=10):
+            return None, "connect_failed", None
+
+        fetcher = MetricsFetcher(ssh)
+        processes = fetcher.get_processes(limit=limit)
+        return processes, "ok", None
+
+    except HostKeyMismatchError as e:
+        logger.critical(str(e))
+        return None, "host_key_mismatch", str(e)
+    except Exception as e:
+        logger.error(f"SSH error in /processes: {e}")
+        return None, "error", str(e)
+    finally:
+        ssh.close()
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
 def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
     servers = db.query(Server).filter(Server.is_active == True).all()
-    
+
     dashboard_servers = []
     active_count = 0
     available_count = 0
-    
+
     for server in servers:
         active_count += 1
         latest_metric = (
@@ -37,7 +67,7 @@ def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
             .order_by(desc(Metric.timestamp))
             .first()
         )
-        
+
         dashboard_servers.append(DashboardServer(
             id=server.id,
             name=server.name,
@@ -47,18 +77,18 @@ def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
             cpu_percent=latest_metric.cpu_percent if latest_metric else None,
             ram_percent=latest_metric.ram_percent if latest_metric else None,
             disk_used_percent=latest_metric.disk_used_percent if latest_metric else None,
-            last_update=latest_metric.timestamp if latest_metric else None
+            last_update=latest_metric.timestamp if latest_metric else None,
         ))
-        
+
         if latest_metric and latest_metric.is_available:
             available_count += 1
-    
+
     return DashboardResponse(
         total_servers=len(servers),
         active_servers=active_count,
         available_servers=available_count,
         servers=dashboard_servers,
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -103,12 +133,12 @@ def get_server_details(server_id: int, db: Session = Depends(get_db)) -> ServerD
         ram_percent=latest_metric.ram_percent if latest_metric else None,
         disk_used_percent=latest_metric.disk_used_percent if latest_metric else None,
         is_available=latest_metric.is_available if latest_metric else None,
-        last_metric_timestamp=latest_metric.timestamp if latest_metric else None
+        last_metric_timestamp=latest_metric.timestamp if latest_metric else None,
     )
 
 
 @router.get("/servers/{server_id}/processes", response_model=ServerProcesses)
-def get_server_processes(
+async def get_server_processes(
     server_id: int,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -117,36 +147,35 @@ def get_server_processes(
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
 
-    ssh = SSHClient(
-        host=server.host,
-        port=server.port,
-        username=server.username,
-        password=server.password,
-        ssh_key=server.ssh_key,
+    # Блокирующий SSH-вызов в thread pool — не блокирует uvicorn
+    processes, status, error = await asyncio.to_thread(
+        _connect_and_fetch,
+        server.host, server.port, server.username,
+        server.password, server.ssh_key,
+        server, db, limit,
     )
 
-    try:
-        if not ssh.connect(server=server, db=db, timeout=10):
-            raise HTTPException(status_code=503, detail="Cannot connect to server")
-    except HostKeyMismatchError as e:
-        logging.getLogger(__name__).critical(str(e))
-        raise HTTPException(status_code=503, detail="Host key verification failed")
-
-    try:
-        fetcher = MetricsFetcher(ssh)
-        processes_data = fetcher.get_processes(limit=limit)
-
-        processes = [ProcessInfo(**p) for p in processes_data]
-
-        return ServerProcesses(
-            server_id=server_id,
-            server_name=server.name,
-            processes=processes,
-            total_processes=len(processes),
-            timestamp=datetime.now(timezone.utc),
+    if status == "connect_failed":
+        raise HTTPException(status_code=503, detail="Cannot connect to server")
+    if status == "host_key_mismatch":
+        raise HTTPException(
+            status_code=503,
+            detail="Host key verification failed",
         )
-    finally:
-        ssh.close()
+    if status == "error":
+        raise HTTPException(status_code=503, detail=f"SSH error: {error}")
+    if processes is None:
+        raise HTTPException(status_code=503, detail="Cannot connect to server")
+
+    process_infos = [ProcessInfo(**p) for p in processes]
+
+    return ServerProcesses(
+        server_id=server_id,
+        server_name=server.name,
+        processes=process_infos,
+        total_processes=len(process_infos),
+        timestamp=datetime.now(timezone.utc),
+    )
 
 
 @router.get("/servers/{server_id}/metrics/history", response_model=dict)
@@ -155,21 +184,21 @@ def get_metrics_history(
     from_date: Optional[datetime] = Query(None, alias="from"),
     to_date: Optional[datetime] = Query(None, alias="to"),
     limit: int = Query(default=100, ge=1, le=1000),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> dict:
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
+
     query = db.query(Metric).filter(Metric.server_id == server_id)
-    
+
     if from_date:
         query = query.filter(Metric.timestamp >= from_date)
     if to_date:
         query = query.filter(Metric.timestamp <= to_date)
-    
+
     metrics = query.order_by(desc(Metric.timestamp)).limit(limit).all()
-    
+
     return {
         "server_id": server_id,
         "server_name": server.name,
@@ -186,8 +215,8 @@ def get_metrics_history(
                 "network_tx_bytes": m.network_tx_bytes,
                 "uptime_seconds": m.uptime_seconds,
                 "is_available": bool(m.is_available),
-                "timestamp": m.timestamp
+                "timestamp": m.timestamp,
             }
             for m in metrics
-        ]
+        ],
     }

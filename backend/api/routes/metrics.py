@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -7,15 +7,25 @@ from models.database import get_db
 from models.server import Server
 from models.metric import Metric
 from schemas.metric import MetricCreate, MetricResponse, MetricsHistoryResponse
+from config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["metrics"])
+
+
+def _check_internal_key(request: Request) -> None:
+    """Эндпоинты записи метрик требуют INTERNAL_API_KEY."""
+    if not settings.INTERNAL_API_KEY:
+        return  # Ключ не задан — разрешаем (для разработки)
+    provided = request.headers.get("X-Internal-Key", "")
+    if provided != settings.INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Internal access only")
 
 
 @router.get("/servers/{server_id}/metrics", response_model=List[MetricResponse])
 def get_current_metrics(
     server_id: int,
     limit: int = Query(default=1, ge=1, le=10),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> List[MetricResponse]:
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
@@ -36,7 +46,7 @@ def get_metrics_history(
     server_id: int,
     from_date: Optional[datetime] = Query(None, alias="from"),
     to_date: Optional[datetime] = Query(None, alias="to"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> MetricsHistoryResponse:
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
@@ -54,16 +64,18 @@ def get_metrics_history(
     return MetricsHistoryResponse(
         server_id=server_id,
         server_name=server.name,
-        metrics=metrics
+        metrics=metrics,
     )
 
 
 @router.post("/servers/{server_id}/metrics", response_model=MetricResponse, status_code=201)
-def create_metric(
+async def create_metric(
     server_id: int,
     metric: MetricCreate,
-    db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> MetricResponse:
+    _check_internal_key(request)
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
