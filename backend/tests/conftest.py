@@ -1,8 +1,14 @@
+import os
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from cryptography.fernet import Fernet
+
+# Генерируем тестовый ключ ДО импорта settings (config.py)
+_TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
+os.environ.setdefault("ENCRYPTION_KEY", _TEST_ENCRYPTION_KEY)
 
 from main import app
 from models.database import Base, get_db
