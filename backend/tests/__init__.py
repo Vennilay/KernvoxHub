@@ -1,1 +1,1 @@
-import pytest
+"""Test package marker."""

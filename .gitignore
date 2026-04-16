@@ -70,6 +70,7 @@ yarn-error.log*
 docker-compose.override.yml
 docker-compose.dev.yml
 *.tar
+certbot/
 
 # Testing
 .pytest_cache/

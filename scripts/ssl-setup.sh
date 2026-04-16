@@ -1,83 +1,103 @@
 #!/bin/bash
 
-set -e
+set -Eeuo pipefail
 
-echo "========================================"
-echo "  SSL Certificate Setup (Let's Encrypt)"
-echo "========================================"
-echo ""
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${ROOT_DIR}/.env"
+cd "$ROOT_DIR"
 
-if ! command -v docker &> /dev/null; then
-    echo "❌ Docker не найден."
-    exit 1
-fi
+# shellcheck source=scripts/lib/env.sh
+. "${ROOT_DIR}/scripts/lib/env.sh"
+# shellcheck source=scripts/lib/common.sh
+. "${ROOT_DIR}/scripts/lib/common.sh"
 
-COMPOSE_CMD=""
-if docker compose version &> /dev/null; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
-fi
+setup_error_trap
 
-if [ -z "$COMPOSE_CMD" ]; then
-    echo "❌ Docker Compose не найден."
-    exit 1
-fi
-
-if [ ! -f .env ]; then
-    echo "❌ .env файл не найден. Запустите setup.sh сначала."
-    exit 1
-fi
-
-source .env
-
-if [ -z "$DOMAIN" ] || [ "$DOMAIN" == "localhost" ]; then
-    echo "⚠️  SSL сертификаты Let's Encrypt работают только с публичными доменами."
-    echo "   Для localhost используйте self-signed сертификаты."
-    echo ""
-    read -p "📍 Введите ваш домен: " DOMAIN
-    if [ -z "$DOMAIN" ]; then
-        echo "❌ Домен не введён."
-        exit 1
+collect_ssl_configuration() {
+    if [ ! -f "$ENV_FILE" ]; then
+        die ".env файл не найден. Сначала запустите setup.sh."
     fi
-    sed -i "s/^DOMAIN=.*/DOMAIN=$DOMAIN/" .env
-fi
 
-echo "📍 Домен: $DOMAIN"
-echo "📧 Email: $EMAIL"
-echo ""
+    load_env_file "$ENV_FILE"
 
-mkdir -p certbot/www
-mkdir -p certbot/conf
+    while true; do
+        if [ -z "${DOMAIN:-}" ] || [ "$DOMAIN" = "localhost" ] || [ "$DOMAIN" = "127.0.0.1" ]; then
+            warn "Let's Encrypt не работает для localhost и loopback-адресов."
+        fi
 
-echo "🚀 Запуск Certbot для получения сертификата..."
+        DOMAIN="$(prompt_with_default "📍 Введите публичный домен для сертификата" "${DOMAIN:-}")"
+        EMAIL="$(prompt_with_default "📧 Email для SSL уведомлений" "${EMAIL:-admin@example.com}")"
 
-$COMPOSE_CMD run --rm certbot certonly \
-    --webroot \
-    --webroot-path=/var/www/certbot \
-    --email "$EMAIL" \
-    --agree-tos \
-    --no-eff-email \
-    -d "$DOMAIN"
+        if (validate_domain_and_email "$DOMAIN" "$EMAIL" "true"); then
+            break
+        fi
 
-if [ $? -eq 0 ]; then
+        warn "Исправьте DOMAIN и EMAIL и повторите ввод."
+        echo ""
+    done
+
+    upsert_env_value "$ENV_FILE" "DOMAIN" "$DOMAIN"
+    upsert_env_value "$ENV_FILE" "EMAIL" "$EMAIL"
+}
+
+ensure_ssl_runtime() {
+    local family=""
+
+    require_sudo_session "SSL setup проверяет Docker daemon и может перезапускать системный Docker. Может потребоваться sudo-пароль."
+    install_docker_if_missing
+
+    if [ "$(uname -s)" = "Linux" ]; then
+        family="$(detect_linux_family)" || die "Не удалось определить Linux-дистрибутив для подготовки Docker Compose."
+        install_compose_if_missing "$family"
+    fi
+
+    init_docker_commands
+}
+
+request_certificate() {
+    mkdir -p "${ROOT_DIR}/certbot/www" "${ROOT_DIR}/certbot/conf"
+
+    info "Запускаю backend и nginx для ACME challenge..."
+    compose_run up -d backend nginx
+    wait_for_service_ready backend 180 || die "Backend не готов к выпуску сертификата."
+    wait_for_service_ready nginx 120 || die "Nginx не готов к выпуску сертификата."
+
+    info "Запрашиваю сертификат Let's Encrypt для ${DOMAIN}..."
+    compose_run run --rm certbot certonly \
+        --non-interactive \
+        --webroot \
+        --webroot-path=/var/www/certbot \
+        --email "$EMAIL" \
+        --agree-tos \
+        --no-eff-email \
+        --keep-until-expiring \
+        --preferred-challenges http \
+        -d "$DOMAIN"
+
+    info "Перезапускаю nginx для применения TLS-конфигурации..."
+    compose_run restart nginx
+    wait_for_service_ready nginx 120 || die "Nginx не поднялся после включения TLS."
+}
+
+main() {
+    section "SSL Certificate Setup"
     echo ""
-    echo "✅ Сертификат успешно получен!"
+
+    ensure_ssl_runtime
+    collect_ssl_configuration
+
+    echo "📍 Домен: $DOMAIN"
+    echo "📧 Email: $EMAIL"
     echo ""
-    echo "📁 Сертификаты сохранены в:"
-    echo "   /etc/letsencrypt/live/"
+
+    request_certificate
+
     echo ""
-    echo "🔄 Перезапуск nginx..."
-    $COMPOSE_CMD restart nginx
+    section "SSL настроен"
     echo ""
-    echo "========================================"
-    echo "  ✅ SSL настроен!"
-    echo "========================================"
+    echo "🔒 HTTPS доступен: https://${DOMAIN}"
+    echo "📁 Сертификаты находятся в /etc/letsencrypt/live/${DOMAIN}"
     echo ""
-    echo "🔒 HTTPS доступен: https://$DOMAIN"
-    echo ""
-else
-    echo "❌ Не удалось получить сертификат."
-    echo "   Проверьте, что домен указывает на ваш сервер."
-    exit 1
-fi
+}
+
+main "$@"

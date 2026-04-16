@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     API_SECRET: str
     ENCRYPTION_KEY: str
     INTERNAL_API_KEY: str = ""
-    CORS_ORIGINS: str = "*"
+    CORS_ORIGINS: str = "http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000"
     COLLECTOR_INTERVAL: int = 60
 
     @property
