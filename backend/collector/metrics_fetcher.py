@@ -29,7 +29,27 @@ class MetricsFetcher:
     
     def _get_cpu_percent(self) -> float:
         exit_code, output, _ = self.ssh.execute(
-            "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1"
+            "prev=$(grep '^cpu ' /proc/stat); "
+            "sleep 1; "
+            "curr=$(grep '^cpu ' /proc/stat); "
+            "awk '"
+            "BEGIN {"
+            "split(prev, a, \" \"); "
+            "split(curr, b, \" \"); "
+            "for (i = 2; i <= 9; i++) { "
+            "prev_total += a[i]; "
+            "curr_total += b[i]; "
+            "} "
+            "prev_idle = a[5] + a[6]; "
+            "curr_idle = b[5] + b[6]; "
+            "total_delta = curr_total - prev_total; "
+            "idle_delta = curr_idle - prev_idle; "
+            "if (total_delta <= 0) { "
+            "print 0; "
+            "} else { "
+            "printf \"%.2f\", ((total_delta - idle_delta) / total_delta) * 100; "
+            "} "
+            "}' prev=\"$prev\" curr=\"$curr\""
         )
         if exit_code == 0 and output.strip():
             try:
@@ -49,15 +69,27 @@ class MetricsFetcher:
         return 0.0
     
     def _get_ram_metrics(self) -> Dict[str, float]:
-        exit_code, output, _ = self.ssh.execute("free -m | grep Mem")
+        exit_code, output, _ = self.ssh.execute(
+            "awk '"
+            "/^MemTotal:/ { total_kb = $2 } "
+            "/^MemAvailable:/ { available_kb = $2 } "
+            "END { "
+            "if (total_kb <= 0) { "
+            "print \"0 0 0\"; "
+            "} else { "
+            "used_kb = total_kb - available_kb; "
+            "printf \"%.2f %.2f %.2f\", used_kb / 1024, total_kb / 1024, (used_kb / total_kb) * 100; "
+            "} "
+            "}' /proc/meminfo"
+        )
         if exit_code != 0 or not output.strip():
             return {"ram_used_mb": 0.0, "ram_total_mb": 0.0, "ram_percent": 0.0}
-        
+
         parts = output.split()
-        if len(parts) >= 7:
+        if len(parts) >= 3:
+            used = float(parts[0])
             total = float(parts[1])
-            used = float(parts[2])
-            percent = (used / total * 100) if total > 0 else 0.0
+            percent = float(parts[2])
             return {
                 "ram_used_mb": used,
                 "ram_total_mb": total,
