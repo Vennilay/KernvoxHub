@@ -36,26 +36,6 @@ generate_fernet_key() {
     openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'
 }
 
-ensure_host_dependencies() {
-    local family=""
-
-    require_sudo_session "Установщик проверяет системные зависимости и доступ к Docker daemon. Может потребоваться sudo-пароль."
-    install_docker_if_missing
-
-    if [ "$(uname -s)" = "Linux" ]; then
-        family="$(detect_linux_family)" || die "Не удалось определить Linux-дистрибутив для установки OpenSSL."
-        install_openssl_if_missing "$family"
-        install_http_probe_client_if_missing "$family"
-        install_compose_if_missing "$family"
-    fi
-
-    command_exists openssl || die "OpenSSL не найден. Установите OpenSSL и повторите запуск."
-    command_exists curl || command_exists wget || command_exists python3 || command_exists python || \
-        die "Не найден curl, wget или Python. Один из этих инструментов нужен для health checks installer'а."
-    ensure_docker_group_membership
-    init_docker_commands
-}
-
 load_existing_env() {
     if [ -f "$ENV_FILE" ]; then
         load_env_file "$ENV_FILE"
