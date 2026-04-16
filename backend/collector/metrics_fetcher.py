@@ -86,14 +86,33 @@ class MetricsFetcher:
     
     def _get_network_metrics(self) -> Dict[str, float]:
         exit_code, output, _ = self.ssh.execute(
-            "cat /proc/net/dev | grep -E 'eth0|ens|enp' | head -1"
+            "ip route show default 2>/dev/null | awk '/default/ {print $5; exit}'"
+        )
+        if exit_code == 0 and output.strip():
+            interface = output.strip()
+            exit_code, output, _ = self.ssh.execute(
+                f"awk -F'[: ]+' '$1 ~ /^{interface}$/ {{print $3, $11}}' /proc/net/dev"
+            )
+            if exit_code == 0 and output.strip():
+                parts = output.split()
+                if len(parts) >= 2:
+                    try:
+                        return {
+                            "network_rx_bytes": float(parts[0]),
+                            "network_tx_bytes": float(parts[1]),
+                        }
+                    except ValueError:
+                        pass
+
+        exit_code, output, _ = self.ssh.execute(
+            "awk -F'[: ]+' '$1 !~ /^(lo|)$/ {rx += $3; tx += $11} END {print rx+0, tx+0}' /proc/net/dev"
         )
         if exit_code == 0 and output.strip():
             parts = output.split()
-            if len(parts) >= 10:
+            if len(parts) >= 2:
                 try:
-                    rx_bytes = float(parts[1])
-                    tx_bytes = float(parts[9])
+                    rx_bytes = float(parts[0])
+                    tx_bytes = float(parts[1])
                     return {
                         "network_rx_bytes": rx_bytes,
                         "network_tx_bytes": tx_bytes

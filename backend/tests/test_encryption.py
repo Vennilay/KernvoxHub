@@ -1,13 +1,4 @@
-"""
-Тесты шифрования чувствительных полей Server (VULN-07 fix).
-
-Проверяют:
-1. encrypt_value / decrypt_value корректно работают
-2. None и пустые строки возвращаются как есть
-3. Модель Server шифрует при записи и расшифровывает при чтении
-4. В БД хранится ciphertext, а не plaintext
-5. API-ответы не содержат password/ssh_key
-"""
+"""Тесты шифрования чувствительных полей."""
 
 import os
 import pytest
@@ -17,27 +8,19 @@ from sqlalchemy import text
 from utils.encryption import encrypt_value, decrypt_value
 
 
-# ---------------------------------------------------------------------------
-# Фикстура: валидный Fernet-ключ (переопределяет env до импорта settings)
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(autouse=True)
 def _set_encryption_key(monkeypatch):
-    """Генерируем валидный Fernet-ключ и ставим в env."""
+    """Подменяет ключ шифрования."""
     key = Fernet.generate_key().decode()
     monkeypatch.setenv("ENCRYPTION_KEY", key)
 
-
-# ---------------------------------------------------------------------------
-# Тесты утилит шифрования
-# ---------------------------------------------------------------------------
 
 class TestEncryptionUtils:
     def test_encrypt_decrypt_roundtrip(self):
         secret = "my_super_secret_password"
         encrypted = encrypt_value(secret)
         assert encrypted != secret
-        assert encrypted.startswith("gAAAAA")  # Fernet prefix
+        assert encrypted.startswith("gAAAAA")
         decrypted = decrypt_value(encrypted)
         assert decrypted == secret
 
@@ -54,13 +37,13 @@ class TestEncryptionUtils:
         assert decrypt_value("") == ""
 
     def test_decrypt_unencrypted_raises(self):
-        """Строка, не являющаяся Fernet-токеном, вызывает ошибку."""
+        """Проверяет ошибку на нешифрованной строке."""
         plaintext = "not_encrypted_password"
         with pytest.raises(Exception):
             decrypt_value(plaintext)
 
     def test_different_encryption_outputs(self):
-        """Один и тот же plaintext даёт разный ciphertext (Fernet включает timestamp)."""
+        """Проверяет различие ciphertext для одинакового ввода."""
         secret = "same_secret"
         enc1 = encrypt_value(secret)
         enc2 = encrypt_value(secret)
@@ -69,13 +52,9 @@ class TestEncryptionUtils:
         assert decrypt_value(enc2) == secret
 
 
-# ---------------------------------------------------------------------------
-# Тесты модели Server
-# ---------------------------------------------------------------------------
-
 class TestServerEncryption:
     def test_password_encrypted_in_db(self, db_session):
-        """При записи password в БД попадает зашифрованным."""
+        """Проверяет шифрование password в БД."""
         from models.server import Server
 
         server = Server(
@@ -87,7 +66,6 @@ class TestServerEncryption:
         db_session.add(server)
         db_session.commit()
 
-        # Сырой запрос к БД — должно быть зашифровано
         row = db_session.execute(
             text("SELECT password FROM servers WHERE id = :id"),
             {"id": server.id},
@@ -96,7 +74,7 @@ class TestServerEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_password_decrypted_on_read(self, db_session):
-        """При чтении через property password возвращается расшифрованное."""
+        """Проверяет чтение password через property."""
         from models.server import Server
 
         server = Server(
@@ -112,7 +90,7 @@ class TestServerEncryption:
         assert server.password == "plain_password_123"
 
     def test_ssh_key_encrypted_in_db(self, db_session):
-        """SSH-ключ хранится в БД зашифрованным."""
+        """Проверяет шифрование SSH-ключа в БД."""
         from models.server import Server
 
         key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
@@ -133,7 +111,7 @@ class TestServerEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_ssh_key_decrypted_on_read(self, db_session):
-        """При чтении через property ssh_key возвращается расшифрованное."""
+        """Проверяет чтение SSH-ключа через property."""
         from models.server import Server
 
         key = "-----BEGIN RSA PRIVATE KEY-----\ntest_key_content\n-----END RSA PRIVATE KEY-----"
@@ -150,7 +128,7 @@ class TestServerEncryption:
         assert server.ssh_key == key
 
     def test_none_password_and_ssh_key(self, db_session):
-        """None-значения не ломают шифрование."""
+        """Проверяет обработку None."""
         from models.server import Server
 
         server = Server(
@@ -166,7 +144,7 @@ class TestServerEncryption:
         assert server.ssh_key is None
 
     def test_password_update_via_setattr(self, db_session):
-        """setattr(obj, 'password', val) корректно шифрует (через property setter)."""
+        """Проверяет обновление password через setattr."""
         from models.server import Server
 
         server = Server(
@@ -177,7 +155,6 @@ class TestServerEncryption:
         db_session.add(server)
         db_session.commit()
 
-        # Эмуляция того, что делает update_server в API
         setattr(server, "password", "new_password_456")
         db_session.commit()
         db_session.refresh(server)
@@ -191,13 +168,9 @@ class TestServerEncryption:
         assert row[0].startswith("gAAAAA")
 
 
-# ---------------------------------------------------------------------------
-# Тесты API: password/ssh_key не утекают в ответ
-# ---------------------------------------------------------------------------
-
 class TestServerAPIEncryption:
-    def test_create_server_response_excludes_secrets(self, client):
-        """POST /servers не возвращает password/ssh_key в ответе."""
+    def test_create_server_response_excludes_secrets(self, client, auth_headers):
+        """Проверяет отсутствие секретов в ответе POST /servers."""
         response = client.post(
             "/api/v1/servers",
             json={
@@ -207,15 +180,15 @@ class TestServerAPIEncryption:
                 "password": "secret123",
                 "ssh_key": "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
             },
+            headers=auth_headers,
         )
         assert response.status_code == 201
         data = response.json()
         assert "password" not in data
         assert "ssh_key" not in data
 
-    def test_get_servers_excludes_secrets(self, client):
-        """GET /servers не возвращает password/ssh_key."""
-        # Сначала создаём сервер
+    def test_get_servers_excludes_secrets(self, client, auth_headers):
+        """Проверяет отсутствие секретов в ответе GET /servers."""
         client.post(
             "/api/v1/servers",
             json={
@@ -224,8 +197,9 @@ class TestServerAPIEncryption:
                 "username": "admin",
                 "password": "secret123",
             },
+            headers=auth_headers,
         )
-        response = client.get("/api/v1/servers")
+        response = client.get("/api/v1/servers", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1

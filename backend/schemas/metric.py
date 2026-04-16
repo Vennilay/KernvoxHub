@@ -16,7 +16,7 @@ class MetricBase(BaseModel):
 
 
 class MetricCreate(MetricBase):
-    server_id: int
+    pass
 
 
 class MetricResponse(MetricBase):

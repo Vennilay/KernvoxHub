@@ -4,14 +4,10 @@ import logging
 import time
 from typing import Optional, Tuple
 
-from utils.encryption import encrypt_value
-
 logger = logging.getLogger(__name__)
 
 
 class HostKeyMismatchError(Exception):
-    """Host key сервера не совпадает с сохранённым — возможна MITM-атака."""
-
     def __init__(self, host: str, port: int, expected: str, got: str):
         self.host = host
         self.port = port
@@ -25,7 +21,6 @@ class HostKeyMismatchError(Exception):
 
     @staticmethod
     def _fingerprint(key_string: str) -> str:
-        """MD5-подобный отпечаток из base64-ключа (первые 16 символов)."""
         if not key_string:
             return "<none>"
         parts = key_string.split(None, 1)
@@ -43,29 +38,37 @@ class SSHClient:
         self.password = password
         self.ssh_key = ssh_key
         self.client: Optional[paramiko.SSHClient] = None
+        self.discovered_host_key: Optional[str] = None
 
-    def connect(self, timeout: int = 10, retries: int = 2,
-                server=None, db=None) -> bool:
-        """
-        Подключение к SSH с проверкой host-ключа.
+    def _load_private_key(self):
+        key_types = []
+        for key_type_name in ("Ed25519Key", "ECDSAKey", "RSAKey", "DSSKey"):
+            key_type = getattr(paramiko, key_type_name, None)
+            if key_type is not None:
+                key_types.append(key_type)
 
-        :param server: объект Server из БД (для проверки/сохранения host_key)
-        :param db: SQLAlchemy Session (для commit при первом сохранении ключа)
-        :param timeout: таймаут подключения в секундах
-        :param retries: количество повторных попыток
-        :return: True при успешном подключении
-        :raises HostKeyMismatchError: если ключ не совпадает с сохранённым
-        """
-        saved_host_key: Optional[str] = None
-        if server is not None:
-            saved_host_key = server.host_key
+        last_error = None
+        for key_type in key_types:
+            try:
+                return key_type.from_private_key(io.StringIO(self.ssh_key))
+            except Exception as exc:
+                last_error = exc
+
+        raise paramiko.SSHException(
+            f"Unsupported or invalid private key format: {last_error}"
+        )
+
+    def connect(
+        self,
+        timeout: int = 10,
+        retries: int = 2,
+        saved_host_key: Optional[str] = None,
+    ) -> bool:
+        self.discovered_host_key = None
 
         for attempt in range(retries):
             try:
                 self.client = paramiko.SSHClient()
-                # Всегда используем AutoAddPolicy, но ПРОВЕРЯЕМ ключ после
-                # подключения вручную — так мы не теряем возможность первого
-                # подключения, но при этом ловим MITM при повторных.
                 self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
                 connect_kwargs = {
@@ -78,25 +81,22 @@ class SSHClient:
                 }
 
                 if self.ssh_key:
-                    pkey = paramiko.RSAKey.from_private_key(
-                        io.StringIO(self.ssh_key)
-                    )
+                    pkey = self._load_private_key()
                     connect_kwargs["pkey"] = pkey
                 else:
                     connect_kwargs["password"] = self.password
 
                 self.client.connect(**connect_kwargs)
 
-                # --- Проверка host key ---
                 transport = self.client.get_transport()
                 if transport is None:
                     raise RuntimeError("Transport is None after connect")
 
                 remote_key = transport.get_remote_server_key()
                 remote_key_string = f"{remote_key.get_name()} {remote_key.get_base64()}"
+                self.discovered_host_key = remote_key_string
 
                 if saved_host_key is not None:
-                    # Ключ уже был сохранён — сверяем
                     if remote_key_string != saved_host_key:
                         logger.critical(
                             "POSSIBLE MITM ATTACK on %s:%d! "
@@ -110,14 +110,10 @@ class SSHClient:
                             self.host, self.port, saved_host_key, remote_key_string
                         )
                 else:
-                    # Первое подключение — сохраняем ключ
-                    if server is not None and db is not None:
-                        server._host_key_encrypted = encrypt_value(remote_key_string)
-                        db.commit()
-                        logger.info(
-                            "New host key saved for %s:%d (type: %s)",
-                            self.host, self.port, remote_key.get_name(),
-                        )
+                    logger.info(
+                        "Discovered new host key for %s:%d (type: %s)",
+                        self.host, self.port, remote_key.get_name(),
+                    )
 
                 logger.info(
                     "SSH connected to %s:%d (attempt %d)",
@@ -126,7 +122,6 @@ class SSHClient:
                 return True
 
             except HostKeyMismatchError:
-                # Не ретраим — это фатальная ошибка безопасности
                 raise
             except Exception as e:
                 logger.warning(

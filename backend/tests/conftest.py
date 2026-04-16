@@ -6,13 +6,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from cryptography.fernet import Fernet
 
-# Генерируем тестовые ключи ДО импорта settings (config.py)
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
 _TEST_API_SECRET = "test_api_secret_for_development"
+_TEST_API_TOKEN = "kvx_test_bootstrap_token"
 _TEST_REDIS_PASSWORD = "test_redis_password"
 
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_ENCRYPTION_KEY)
 os.environ.setdefault("API_SECRET", _TEST_API_SECRET)
+os.environ.setdefault("API_TOKEN", _TEST_API_TOKEN)
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("REDIS_PASSWORD", _TEST_REDIS_PASSWORD)
@@ -56,3 +57,14 @@ def client(db_session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def auth_headers():
+    return {"X-API-Key": os.environ["API_TOKEN"]}
+
+
+@pytest.fixture(scope="function")
+def internal_headers():
+    token = os.environ.get("INTERNAL_API_KEY", "")
+    return {"X-Internal-Key": token} if token else {}

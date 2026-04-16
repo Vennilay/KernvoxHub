@@ -1,8 +1,7 @@
 import logging
-import time
-from typing import Callable
+from typing import Callable, Optional
 
-from fastapi import Request, status
+from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 from services.token_manager import validate_api_token
 from services.redis_client import redis_client
@@ -12,22 +11,19 @@ logger = logging.getLogger(__name__)
 API_KEY_HEADER = "X-API-Key"
 PUBLIC_PATHS = {"/", "/docs", "/openapi.json", "/api/v1/health", "/redoc"}
 
-# Rate limiting: после N неудачных попыток за WINDOW секунд — бан на BAN_SECONDS
-RATE_LIMIT_WINDOW = 60       # окно подсчёта (секунды)
-RATE_LIMIT_MAX_ATTEMPTS = 10  # максимум неудачных попыток
-RATE_LIMIT_BAN_SECONDS = 300  # длительность бана
+RATE_LIMIT_WINDOW = 60
+RATE_LIMIT_MAX_ATTEMPTS = 10
+RATE_LIMIT_BAN_SECONDS = 300
 
 
 def _get_client_ip(request: Request) -> str:
-    """Получает реальный IP (учитывая X-Forwarded-For от Nginx)."""
-    forwarded = request.headers.get("x-forwarded-for")
+    forwarded = request.headers.get("x-real-ip")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.strip()
     return request.client.host if request.client else "unknown"
 
 
-async def _check_rate_limit(client_ip: str) -> None:
-    """Проверяет, не забанен ли IP и не превышен ли лимит попыток."""
+async def _check_rate_limit(client_ip: str) -> Optional[str]:
     if not redis_client:
         return
 
@@ -46,7 +42,6 @@ async def _check_rate_limit(client_ip: str) -> None:
 
 
 async def _record_failed_attempt(client_ip: str) -> None:
-    """Увеличивает счётчик неудачных попыток."""
     if not redis_client:
         return
     attempts_key = f"auth_attempts:{client_ip}"

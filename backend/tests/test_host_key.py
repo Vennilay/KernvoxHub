@@ -1,15 +1,4 @@
-"""
-Тесты проверки SSH host key (VULN-06 fix).
-
-Проверяют:
-1. HostKeyMismatchError содержит корректную информацию
-2. При первом подключении host_key сохраняется в БД
-3. При повторном подключении с тем же ключом — успех
-4. При подмене ключа — HostKeyMismatchError
-
-Примечание: полноценные интегральные тесты требуют реального SSH-сервера.
-Здесь тестируется логика шифрования/сравнения ключей и поведение модели.
-"""
+"""Тесты проверки SSH host key."""
 
 import pytest
 from cryptography.fernet import Fernet
@@ -31,12 +20,12 @@ class TestHostKeyMismatchError:
         assert "MITM" in str(exc)
 
     def test_fingerprint_truncation(self):
-        """Fingerprint обрезается для читаемости."""
+        """Проверяет сокращение fingerprint."""
         short = HostKeyMismatchError._fingerprint("ssh-rsa abc")
-        assert "..." not in short  # короткий — без обрезки
+        assert "..." not in short
 
         long = HostKeyMismatchError._fingerprint("ssh-rsa " + "A" * 200)
-        assert "..." in long  # длинный — обрезан
+        assert "..." in long
 
     def test_fingerprint_empty(self):
         assert HostKeyMismatchError._fingerprint("") == "<none>"
@@ -44,10 +33,10 @@ class TestHostKeyMismatchError:
 
 
 class TestHostKeyEncryption:
-    """Проверяем, что host_key шифруется в модели так же, как password/ssh_key."""
+    """Проверяет работу host_key в модели."""
 
     def test_host_key_encrypted_in_model(self, db_session):
-        """При записи host_key в БД попадает зашифрованным."""
+        """Проверяет шифрование host_key в БД."""
         from models.server import Server
 
         server = Server(
@@ -59,7 +48,6 @@ class TestHostKeyEncryption:
         db_session.add(server)
         db_session.commit()
 
-        # Сырой запрос — должно быть зашифровано
         row = db_session.execute(
             text("SELECT host_key FROM servers WHERE id = :id"),
             {"id": server.id},
@@ -68,7 +56,7 @@ class TestHostKeyEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_host_key_decrypted_on_read(self, db_session):
-        """При чтении через property host_key возвращается расшифрованное."""
+        """Проверяет чтение host_key через property."""
         from models.server import Server
 
         original_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG_test_key"
@@ -85,7 +73,7 @@ class TestHostKeyEncryption:
         assert server.host_key == original_key
 
     def test_host_key_none(self, db_session):
-        """None host_key не ломает модель."""
+        """Проверяет обработку None."""
         from models.server import Server
 
         server = Server(
@@ -100,15 +88,13 @@ class TestHostKeyEncryption:
         assert server.host_key is None
 
     def test_host_key_mismatch_detection(self):
-        """Симуляция: если сохранённый ключ не совпадает — должно быть исключение."""
+        """Проверяет обработку несовпадения ключа."""
         saved_key = encrypt_value("ssh-rsa AAAA_original_key")
         got_key = "ssh-rsa AAAA_fake_key_from_server"
 
-        # Симуляция того, что делает SSHClient.connect() после подключения
         decrypted_saved = decrypt_value(saved_key)
         assert decrypted_saved != got_key
 
-        # Должно возникнуть исключение
         with pytest.raises(HostKeyMismatchError) as exc_info:
             raise HostKeyMismatchError(
                 host="10.0.0.1", port=22,
@@ -119,10 +105,10 @@ class TestHostKeyEncryption:
         assert "MITM" in str(exc_info.value)
 
     def test_host_key_match_simulation(self):
-        """Симуляция: если ключи совпадают — подключения проходит."""
+        """Проверяет совпадение ключа."""
         original = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG_match_key"
         saved_key = encrypt_value(original)
-        got_key = original  # сервер вернул тот же ключ
+        got_key = original
 
         decrypted = decrypt_value(saved_key)
-        assert decrypted == got_key  # совпадают — подключение разрешено
+        assert decrypted == got_key

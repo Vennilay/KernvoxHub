@@ -72,8 +72,9 @@ chmod +x setup.sh
 
 Скрипт:
 - Проверит наличие Docker и Docker Compose
+- Проверит доступность зависимостей для health checks installer'а
 - Запросит домен и email для SSL
-- Сгенерирует безопасные пароли
+- Сгенерирует и сохранит секреты в `.env`
 - Создаст `.env` файл
 - Запустит все сервисы
 
@@ -97,7 +98,8 @@ docker-compose ps
 X-API-Key: ваш_api_токен
 ```
 
-Токен генерируется при установке и хранится в `.env`.
+Bootstrap-токен генерируется при установке и хранится в `.env` как `API_TOKEN`.
+Команда `generate-token` выпускает дополнительные случайные токены независимо от `API_SECRET`.
 
 ### Endpoints
 
@@ -201,7 +203,7 @@ docker-compose exec backend python -m cli.main --help
 
 | Команда | Описание |
 |---------|----------|
-| `generate-token` | Генерация API токена |
+| `generate-token` | Выпуск нового API токена |
 | `status` | Статус системы |
 | `list-servers` | Список серверов |
 | `add-server` | Добавить сервер (интерактивно) |
@@ -271,16 +273,20 @@ kernvox-hub/
 │   ├── tests/
 │   │   ├── conftest.py
 │   │   ├── test_api.py
-│   │   └── test_android.py
+│   │   ├── test_android.py
+│   │   └── test_metrics_api.py
 │   ├── config.py                # Настройки
 │   ├── main.py                  # FastAPI приложение
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── nginx/
-│   └── nginx.conf               # Nginx конфигурация
+│   ├── entrypoint.sh            # Рендер и reload nginx-конфига
+│   ├── nginx.conf               # HTTP-шаблон nginx
+│   └── nginx-https.conf         # HTTPS-шаблон nginx
 ├── scripts/
 │   ├── init_db.sql              # TimescaleDB
-│   └── ssl-setup.sh             # SSL скрипт
+│   ├── ssl-setup.sh             # Выпуск и проверка SSL
+│   └── lib/                     # Общие shell-хелперы installer'а
 ├── docker-compose.yml
 ├── setup.sh
 ├── .env.example
@@ -310,6 +316,7 @@ docker-compose exec backend pytest --cov=backend --cov-report=html
 ```bash
 POSTGRES_PASSWORD=secure_random_string
 API_SECRET=another_secure_random_string
+API_TOKEN=kvx_random_api_token
 COLLECTOR_INTERVAL=60
 DOMAIN=your-domain.com
 EMAIL=admin@example.com

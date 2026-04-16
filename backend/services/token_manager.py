@@ -1,31 +1,47 @@
 import logging
+import hashlib
+import hmac
+import secrets
 
 from services.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
-VALID_API_KEY = None
+TOKEN_PREFIX = "kvx_"
+TOKEN_HASH_SET_KEY = "api_tokens"
+TOKEN_CACHE_PREFIX = "token_cache:"
+BOOTSTRAP_API_KEY = None
 
 
-def _build_api_key(api_secret: str) -> str:
-    return f"kvx_{api_secret[:32]}"
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def get_valid_api_key() -> str:
-    global VALID_API_KEY
-    if VALID_API_KEY is None:
+def get_bootstrap_api_key() -> str:
+    global BOOTSTRAP_API_KEY
+    if BOOTSTRAP_API_KEY is None:
         from config import settings
-        if not settings.API_SECRET:
+        if not settings.API_TOKEN:
             raise RuntimeError(
-                "API_SECRET is not set. Generate one with: "
-                "openssl rand -hex 32"
+                "API_TOKEN is not set. Run setup.sh to generate a bootstrap API token."
             )
-        VALID_API_KEY = _build_api_key(settings.API_SECRET)
-    return VALID_API_KEY
+        BOOTSTRAP_API_KEY = settings.API_TOKEN
+    return BOOTSTRAP_API_KEY
 
 
 def generate_api_token() -> str:
-    return get_valid_api_key()
+    token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    store_api_token(token)
+    return token
+
+
+def store_api_token(token: str) -> None:
+    if not redis_client:
+        raise RuntimeError("Redis is required to store generated API tokens.")
+
+    token_hash = _hash_token(token)
+    redis_client.sadd(TOKEN_HASH_SET_KEY, token_hash)
+    cache_token(token)
 
 
 def validate_api_token(token: str) -> bool:
@@ -33,16 +49,24 @@ def validate_api_token(token: str) -> bool:
         return False
 
     try:
+        try:
+            bootstrap_key = get_bootstrap_api_key()
+        except RuntimeError:
+            bootstrap_key = ""
+
+        if bootstrap_key and hmac.compare_digest(token, bootstrap_key):
+            cache_token(token)
+            return True
+
         if redis_client:
-            cached = redis_client.get(f"token:{token}")
+            token_hash = _hash_token(token)
+            cached = redis_client.get(f"{TOKEN_CACHE_PREFIX}{token_hash}")
             if cached:
                 return True
 
-        valid_key = get_valid_api_key()
-        if token == valid_key:
-            if redis_client:
+            if redis_client.sismember(TOKEN_HASH_SET_KEY, token_hash):
                 cache_token(token)
-            return True
+                return True
     except Exception as e:
         logger.error(f"Token validation error: {e}")
 
@@ -53,6 +77,6 @@ def cache_token(token: str, ttl: int = 300):
     if not redis_client:
         return
     try:
-        redis_client.setex(f"token:{token}", ttl, "1")
+        redis_client.setex(f"{TOKEN_CACHE_PREFIX}{_hash_token(token)}", ttl, "1")
     except Exception as e:
         logger.error(f"Token caching error: {e}")

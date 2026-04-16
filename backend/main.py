@@ -4,10 +4,9 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-
 from api.middleware.auth import api_key_middleware
 from api.routes import servers_router, metrics_router, android_router
-from models.database import Base, engine
+from models.database import Base, engine, ensure_metrics_hypertable, ensure_runtime_schema
 from config import settings
 
 app = FastAPI(
@@ -16,7 +15,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- Rate limiting ---
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
@@ -31,11 +29,10 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
-# --- CORS из env (не wildcard *) ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -46,10 +43,11 @@ app.include_router(servers_router)
 app.include_router(metrics_router)
 app.include_router(android_router)
 
-
 @app.on_event("startup")
 async def startup_event():
     Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema()
+    ensure_metrics_hypertable()
 
 
 @app.get("/")
