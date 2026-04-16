@@ -114,6 +114,71 @@ EOF
         finally:
             script_copy.unlink(missing_ok=True)
 
+    def test_existing_installation_requires_all_persisted_secrets(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "setup.sh")
+        env_file = Path(tempfile.mkstemp(prefix="kernvox-setup-env.")[1])
+        env_file.write_text("DOMAIN=example.com\nEMAIL=ops@example.com\n")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ENV_FILE="{env_file}"
+                unset POSTGRES_PASSWORD API_SECRET ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
+                load_existing_env
+                docker_run() {{
+                    if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "kernvox-postgres" ]; then
+                        return 0
+                    fi
+                    return 1
+                }}
+                ensure_existing_installation_secrets
+                """
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Найдена существующая инсталляция", result.stderr)
+            self.assertIn("POSTGRES_PASSWORD", result.stderr)
+            self.assertIn("ENCRYPTION_KEY", result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+            env_file.unlink(missing_ok=True)
+
+    def test_existing_installation_accepts_complete_secret_set(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "setup.sh")
+        env_file = Path(tempfile.mkstemp(prefix="kernvox-setup-env.")[1])
+        env_file.write_text(
+            "POSTGRES_PASSWORD=db-secret\n"
+            "API_SECRET=api-secret\n"
+            "ENCRYPTION_KEY=encryption-secret\n"
+            "REDIS_PASSWORD=redis-secret\n"
+            "INTERNAL_API_KEY=internal-secret\n"
+        )
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ENV_FILE="{env_file}"
+                unset POSTGRES_PASSWORD API_SECRET ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
+                load_existing_env
+                docker_run() {{
+                    if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "kernvox-postgres" ]; then
+                        return 0
+                    fi
+                    return 1
+                }}
+                ensure_existing_installation_secrets
+                printf '%s|%s|%s\\n' "$POSTGRES_PASSWORD" "$API_SECRET" "$INTERNAL_API_KEY"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.strip().endswith("db-secret|api-secret|internal-secret"))
+        finally:
+            script_copy.unlink(missing_ok=True)
+            env_file.unlink(missing_ok=True)
+
 
 class SslSetupScriptTestCase(unittest.TestCase):
     def test_collect_ssl_configuration_fails_cleanly_on_eof_after_invalid_input(self) -> None:
