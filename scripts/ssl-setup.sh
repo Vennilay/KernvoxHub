@@ -6,9 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 cd "$ROOT_DIR"
 
-# shellcheck source=scripts/lib/env.sh
 . "${ROOT_DIR}/scripts/lib/env.sh"
-# shellcheck source=scripts/lib/common.sh
 . "${ROOT_DIR}/scripts/lib/common.sh"
 
 setup_error_trap
@@ -54,6 +52,26 @@ ensure_ssl_runtime() {
     init_docker_commands
 }
 
+verify_tls_deployment() {
+    local cert_dir="/etc/letsencrypt/live/${DOMAIN}"
+    local nginx_config=""
+
+    info "Проверяю, что сертификат доступен внутри nginx..."
+    compose_run exec -T nginx test -f "${cert_dir}/fullchain.pem" || \
+        die "Nginx не видит ${cert_dir}/fullchain.pem после выпуска сертификата."
+    compose_run exec -T nginx test -f "${cert_dir}/privkey.pem" || \
+        die "Nginx не видит ${cert_dir}/privkey.pem после выпуска сертификата."
+
+    info "Проверяю, что nginx загрузил TLS-конфигурацию..."
+    nginx_config="$(compose_run exec -T nginx nginx -T 2>/dev/null)" || \
+        die "Не удалось получить активную конфигурацию nginx после перезапуска."
+
+    printf '%s\n' "$nginx_config" | grep -Fq "listen 443 ssl;" || \
+        die "После настройки SSL nginx не слушает 443/TLS."
+    printf '%s\n' "$nginx_config" | grep -Fq "ssl_certificate ${cert_dir}/fullchain.pem;" || \
+        die "Активная конфигурация nginx не использует выпущенный сертификат ${DOMAIN}."
+}
+
 request_certificate() {
     mkdir -p "${ROOT_DIR}/certbot/www" "${ROOT_DIR}/certbot/conf"
 
@@ -77,6 +95,7 @@ request_certificate() {
     info "Перезапускаю nginx для применения TLS-конфигурации..."
     compose_run restart nginx
     wait_for_service_ready nginx 120 || die "Nginx не поднялся после включения TLS."
+    verify_tls_deployment
 }
 
 main() {

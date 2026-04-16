@@ -7,6 +7,7 @@ services:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_dev_password}@redis:6379/0
       - API_SECRET=${API_SECRET}
+      - API_TOKEN=${API_TOKEN:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-redis_dev_password}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}

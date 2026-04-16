@@ -7,7 +7,14 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+def find_repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "setup.sh").exists() and (candidate / "scripts").is_dir():
+            return candidate
+    raise RuntimeError("Could not locate repository root")
+
+
+REPO_ROOT = find_repo_root()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 
@@ -125,7 +132,7 @@ EOF
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
                 ENV_FILE="{env_file}"
-                unset POSTGRES_PASSWORD API_SECRET ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
+                unset POSTGRES_PASSWORD API_SECRET API_TOKEN ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
                 load_existing_env
                 docker_run() {{
                     if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "kernvox-postgres" ]; then
@@ -150,6 +157,7 @@ EOF
         env_file.write_text(
             "POSTGRES_PASSWORD=db-secret\n"
             "API_SECRET=api-secret\n"
+            "API_TOKEN=kvx-bootstrap-token\n"
             "ENCRYPTION_KEY=encryption-secret\n"
             "REDIS_PASSWORD=redis-secret\n"
             "INTERNAL_API_KEY=internal-secret\n"
@@ -161,7 +169,7 @@ EOF
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
                 ENV_FILE="{env_file}"
-                unset POSTGRES_PASSWORD API_SECRET ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
+                unset POSTGRES_PASSWORD API_SECRET API_TOKEN ENCRYPTION_KEY REDIS_PASSWORD INTERNAL_API_KEY
                 load_existing_env
                 docker_run() {{
                     if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "kernvox-postgres" ]; then
@@ -170,11 +178,11 @@ EOF
                     return 1
                 }}
                 ensure_existing_installation_secrets
-                printf '%s|%s|%s\\n' "$POSTGRES_PASSWORD" "$API_SECRET" "$INTERNAL_API_KEY"
+                printf '%s|%s|%s|%s\\n' "$POSTGRES_PASSWORD" "$API_SECRET" "$API_TOKEN" "$INTERNAL_API_KEY"
                 """
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(result.stdout.strip().endswith("db-secret|api-secret|internal-secret"))
+            self.assertTrue(result.stdout.strip().endswith("db-secret|api-secret|kvx-bootstrap-token|internal-secret"))
         finally:
             script_copy.unlink(missing_ok=True)
             env_file.unlink(missing_ok=True)
@@ -207,6 +215,85 @@ EOF
         finally:
             script_copy.unlink(missing_ok=True)
             env_file.unlink(missing_ok=True)
+
+    def test_verify_tls_deployment_rejects_missing_certificates(self) -> None:
+        script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                DOMAIN="api.example.com"
+                compose_run() {{
+                    if [ "$1" = "exec" ] && [ "$2" = "-T" ] && [ "$3" = "nginx" ] && [ "$4" = "test" ]; then
+                        return 1
+                    fi
+                    return 0
+                }}
+                verify_tls_deployment
+                """
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Nginx не видит /etc/letsencrypt/live/api.example.com/fullchain.pem", result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+
+    def test_verify_tls_deployment_requires_loaded_https_config(self) -> None:
+        script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                DOMAIN="api.example.com"
+                compose_run() {{
+                    if [ "$1" = "exec" ] && [ "$2" = "-T" ] && [ "$3" = "nginx" ] && [ "$4" = "test" ]; then
+                        return 0
+                    fi
+                    if [ "$1" = "exec" ] && [ "$2" = "-T" ] && [ "$3" = "nginx" ] && [ "$4" = "nginx" ] && [ "$5" = "-T" ]; then
+                        printf '%s\\n' 'server {{ listen 80; }}'
+                        return 0
+                    fi
+                    return 1
+                }}
+                verify_tls_deployment
+                """
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("nginx не слушает 443/TLS", result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+
+    def test_verify_tls_deployment_accepts_loaded_https_config(self) -> None:
+        script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                DOMAIN="api.example.com"
+                compose_run() {{
+                    if [ "$1" = "exec" ] && [ "$2" = "-T" ] && [ "$3" = "nginx" ] && [ "$4" = "test" ]; then
+                        return 0
+                    fi
+                    if [ "$1" = "exec" ] && [ "$2" = "-T" ] && [ "$3" = "nginx" ] && [ "$4" = "nginx" ] && [ "$5" = "-T" ]; then
+                        printf '%s\\n' 'listen 443 ssl;'
+                        printf '%s\\n' 'ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem;'
+                        return 0
+                    fi
+                    return 1
+                }}
+                verify_tls_deployment
+                echo ok
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.strip().endswith("ok"))
+        finally:
+            script_copy.unlink(missing_ok=True)
 
 
 class NginxEntrypointTestCase(unittest.TestCase):

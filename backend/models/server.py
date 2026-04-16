@@ -14,7 +14,6 @@ class Server(Base):
     port = Column(Integer, default=22)
     username = Column(String(100), nullable=False)
 
-    # Зашифрованные чувствительные поля
     _password_encrypted = Column("password", String, nullable=True)
     _ssh_key_encrypted = Column("ssh_key", String, nullable=True)
     _host_key_encrypted = Column("host_key", Text, nullable=True)
@@ -23,41 +22,35 @@ class Server(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # ------------------------------------------------------------------
-    # Properties — прозрачное шифрование при записи / расшифрование при чтении
-    # ------------------------------------------------------------------
-
     @property
     def password(self) -> str | None:
-        """Возвращает расшифрованный пароль."""
+        """Возвращает пароль."""
         return decrypt_value(self._password_encrypted)
 
     @password.setter
     def password(self, plain_text: str | None) -> None:
-        """Шифрует и сохраняет пароль."""
+        """Сохраняет пароль."""
         self._password_encrypted = encrypt_value(plain_text)
 
     @property
     def ssh_key(self) -> str | None:
-        """Возвращает расшифрованный SSH-ключ."""
+        """Возвращает SSH-ключ."""
         return decrypt_value(self._ssh_key_encrypted)
 
     @ssh_key.setter
     def ssh_key(self, plain_text: str | None) -> None:
-        """Шифрует и сохраняет SSH-ключ."""
+        """Сохраняет SSH-ключ."""
         self._ssh_key_encrypted = encrypt_value(plain_text)
 
     @property
     def host_key(self) -> str | None:
-        """Возвращает расшифрованный host key сервера."""
+        """Возвращает host key."""
         return decrypt_value(self._host_key_encrypted)
 
     @host_key.setter
     def host_key(self, plain_text: str | None) -> None:
-        """Шифрует и сохраняет host key."""
+        """Сохраняет host key."""
         self._host_key_encrypted = encrypt_value(plain_text)
-
-    # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
         return (

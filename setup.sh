@@ -7,15 +7,14 @@ ENV_FILE="${ROOT_DIR}/.env"
 PROTECTED_ENV_KEYS=(
     POSTGRES_PASSWORD
     API_SECRET
+    API_TOKEN
     ENCRYPTION_KEY
     REDIS_PASSWORD
     INTERNAL_API_KEY
 )
 cd "$ROOT_DIR"
 
-# shellcheck source=scripts/lib/env.sh
 . "${ROOT_DIR}/scripts/lib/env.sh"
-# shellcheck source=scripts/lib/common.sh
 . "${ROOT_DIR}/scripts/lib/common.sh"
 
 setup_error_trap
@@ -26,6 +25,10 @@ generate_alnum_secret() {
 
 generate_hex_secret() {
     openssl rand -hex 32
+}
+
+generate_api_token_value() {
+    printf 'kvx_%s' "$(openssl rand -hex 32)"
 }
 
 generate_fernet_key() {
@@ -49,10 +52,13 @@ ensure_host_dependencies() {
     if [ "$(uname -s)" = "Linux" ]; then
         family="$(detect_linux_family)" || die "Не удалось определить Linux-дистрибутив для установки OpenSSL."
         install_openssl_if_missing "$family"
+        install_http_probe_client_if_missing "$family"
         install_compose_if_missing "$family"
     fi
 
     command_exists openssl || die "OpenSSL не найден. Установите OpenSSL и повторите запуск."
+    command_exists curl || command_exists wget || command_exists python3 || command_exists python || \
+        die "Не найден curl, wget или Python. Один из этих инструментов нужен для health checks installer'а."
     ensure_docker_group_membership
     init_docker_commands
 }
@@ -178,6 +184,10 @@ collect_configuration() {
         API_SECRET="${API_SECRET:-$(generate_hex_secret)}"
     fi
 
+    if [ -z "${API_TOKEN:-}" ]; then
+        API_TOKEN="$(generate_api_token_value)"
+    fi
+
     if [ -z "${ENCRYPTION_KEY:-}" ]; then
         ENCRYPTION_KEY="$(generate_fernet_key)"
     fi
@@ -205,6 +215,7 @@ write_env_file() {
 
     upsert_env_value "$ENV_FILE" "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
     upsert_env_value "$ENV_FILE" "API_SECRET" "$API_SECRET"
+    upsert_env_value "$ENV_FILE" "API_TOKEN" "$API_TOKEN"
     upsert_env_value "$ENV_FILE" "ENCRYPTION_KEY" "$ENCRYPTION_KEY"
     upsert_env_value "$ENV_FILE" "REDIS_PASSWORD" "$REDIS_PASSWORD"
     upsert_env_value "$ENV_FILE" "INTERNAL_API_KEY" "$INTERNAL_API_KEY"
@@ -293,11 +304,8 @@ main() {
         echo "🔒 HTTPS: https://${DOMAIN}"
     fi
     echo ""
-    echo "Получить текущий API-ключ:"
+    echo "Выпустить новый API-токен:"
     echo "  ${compose_cmd_string}exec backend python -m cli.main generate-token"
-    echo ""
-    echo "Посмотреть INTERNAL_API_KEY для приёма метрик:"
-    echo "  sed -n 's/^INTERNAL_API_KEY=//p' ${ENV_FILE}"
     echo ""
     echo "Добавить сервер интерактивно:"
     echo "  ${compose_cmd_string}exec backend python -m cli.main add-server"

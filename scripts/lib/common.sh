@@ -296,7 +296,6 @@ detect_linux_family() {
     local family=""
 
     [ -f /etc/os-release ] || return 1
-    # shellcheck disable=SC1091
     . /etc/os-release
 
     family="${ID:-}"
@@ -378,6 +377,20 @@ install_openssl_if_missing() {
         run_privileged apt-get update
     fi
     install_packages "$family" openssl
+}
+
+install_http_probe_client_if_missing() {
+    local family="$1"
+
+    if command_exists curl || command_exists wget || command_exists python3 || command_exists python; then
+        return 0
+    fi
+
+    info "Не найден curl/wget/python. Устанавливаю curl для health checks..."
+    if [ "$family" = "debian" ]; then
+        run_privileged apt-get update
+    fi
+    install_packages "$family" curl
 }
 
 install_docker_on_linux() {

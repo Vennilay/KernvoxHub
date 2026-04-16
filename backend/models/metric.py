@@ -20,7 +20,7 @@ class Metric(Base):
     uptime_seconds = Column(Float, default=0.0)
     is_available = Column(Boolean, default=True)
 
-    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     __table_args__ = (
         Index("ix_metrics_server_id_timestamp", "server_id", "timestamp"),
