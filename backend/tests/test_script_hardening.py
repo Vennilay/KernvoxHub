@@ -188,6 +188,76 @@ EOF
             env_file.unlink(missing_ok=True)
 
 
+class UpdateScriptTestCase(unittest.TestCase):
+    def test_parse_args_supports_ref_skip_git_and_ssl(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                parse_args --ref main --skip-git --with-ssl
+                printf '%s|%s|%s\\n' "$UPDATE_REF" "$SKIP_GIT_UPDATE" "$RUN_SSL_UPDATE"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "main|y|y")
+        finally:
+            script_copy.unlink(missing_ok=True)
+
+    def test_update_requires_existing_installation(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+        env_file = Path(tempfile.mkstemp(prefix="kernvox-update-env.")[1])
+        env_file.write_text(
+            "POSTGRES_PASSWORD=db-secret\n"
+            "API_SECRET=api-secret\n"
+            "API_TOKEN=kvx-bootstrap-token\n"
+            "ENCRYPTION_KEY=encryption-secret\n"
+            "REDIS_PASSWORD=redis-secret\n"
+            "INTERNAL_API_KEY=internal-secret\n"
+        )
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ENV_FILE="{env_file}"
+                load_existing_env
+                docker_run() {{ return 1; }}
+                ensure_existing_installation
+                """
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Существующая инсталляция KernvoxHub не найдена", result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+            env_file.unlink(missing_ok=True)
+
+    def test_update_rejects_dirty_git_worktree(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                git() {{
+                    if [ "$1" = "diff" ]; then
+                        return 1
+                    fi
+                    command git "$@"
+                }}
+                ensure_clean_git_worktree
+                """
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Рабочее дерево Git содержит незакоммиченные изменения", result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+
+
 class SslSetupScriptTestCase(unittest.TestCase):
     def test_collect_ssl_configuration_fails_cleanly_on_eof_after_invalid_input(self) -> None:
         script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")

@@ -78,6 +78,29 @@ chmod +x setup.sh
 - Создаст `.env` файл
 - Запустит все сервисы
 
+#### Обновление существующей инсталляции
+
+Для обновления уже установленного KernvoxHub:
+
+```bash
+chmod +x update.sh
+./update.sh
+```
+
+Скрипт:
+- Проверит существующую инсталляцию и корректность `.env`
+- Безопасно подтянет изменения через `git pull --ff-only`
+- Пересоберет и перезапустит сервисы через Docker Compose
+- Дождется health checks backend, nginx и collector
+
+Дополнительные варианты:
+
+```bash
+./update.sh --ref main
+./update.sh --skip-git
+./update.sh --with-ssl
+```
+
 #### 3. Проверка
 
 ```bash
