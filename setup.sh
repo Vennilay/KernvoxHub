@@ -39,7 +39,7 @@ generate_fernet_key() {
 load_existing_env() {
     if [ -f "$ENV_FILE" ]; then
         load_env_file "$ENV_FILE"
-        chmod 600 "$ENV_FILE"
+        chmod 600 "$ENV_FILE" 2>/dev/null || warn "Не удалось обновить права доступа для ${ENV_FILE}; продолжаю с текущими правами."
         success "Найден существующий .env"
         echo ""
     fi
@@ -201,6 +201,8 @@ main() {
     echo ""
     start_stack
     echo ""
+    configure_update_command
+    echo ""
 
     if [ "$SSL_ENABLE" = "y" ]; then
         info "Запускаю настройку SSL..."
@@ -219,6 +221,12 @@ main() {
     if [ "$SSL_ENABLE" = "y" ]; then
         echo "🔒 HTTPS: https://${DOMAIN}"
     fi
+    echo ""
+    echo "Основная команда управления:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME}"
+    echo ""
+    echo "Обновить проект:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} update"
     echo ""
     echo "Выпустить новый API-токен:"
     echo "  ${compose_cmd_string}exec backend python -m cli.main generate-token"

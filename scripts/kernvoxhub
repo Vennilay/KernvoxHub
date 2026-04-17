@@ -1,0 +1,252 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+installation_state_file_path() {
+    if [ -n "${KERNVOX_STATE_FILE:-}" ]; then
+        printf '%s' "$KERNVOX_STATE_FILE"
+        return 0
+    fi
+
+    [ -n "${HOME:-}" ] || return 1
+    printf '%s/%s/install-dir' "${XDG_CONFIG_HOME:-${HOME}/.config}" "kernvoxhub"
+}
+
+normalize_directory_path() {
+    local dir="$1"
+
+    [ -n "$dir" ] || return 1
+    (
+        cd "$dir" 2>/dev/null && pwd -P
+    )
+}
+
+is_installation_root() {
+    local dir="$1"
+
+    [ -n "$dir" ] || return 1
+    [ -f "${dir}/update.sh" ] || return 1
+    [ -f "${dir}/docker-compose.yml" ] || return 1
+    [ -d "${dir}/scripts" ] || return 1
+}
+
+candidate_root_from_mount_source() {
+    local source="$1"
+
+    case "$source" in
+        */scripts/init_db.sql)
+            normalize_directory_path "$(dirname "$(dirname "$source")")"
+            ;;
+        */certbot/www)
+            normalize_directory_path "$(dirname "$(dirname "$source")")"
+            ;;
+        */nginx)
+            normalize_directory_path "$(dirname "$source")"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+load_root_from_state_file() {
+    local state_file=""
+    local install_root=""
+
+    state_file="$(installation_state_file_path)" || return 1
+    [ -f "$state_file" ] || return 1
+    IFS= read -r install_root < "$state_file" || return 1
+
+    normalize_directory_path "$install_root"
+}
+
+detect_root_from_containers() {
+    local container_name=""
+    local mount_source=""
+    local candidate_root=""
+
+    for container_name in kernvox-nginx kernvox-postgres; do
+        while IFS= read -r mount_source; do
+            [ -n "$mount_source" ] || continue
+
+            candidate_root="$(candidate_root_from_mount_source "$mount_source" 2>/dev/null || true)"
+            if is_installation_root "$candidate_root"; then
+                printf '%s' "$candidate_root"
+                return 0
+            fi
+        done < <(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' "$container_name" 2>/dev/null || true)
+    done
+
+    return 1
+}
+
+resolve_installation_root() {
+    local install_root=""
+
+    if [ -n "${KERNVOX_INSTALL_DIR:-}" ]; then
+        install_root="$(normalize_directory_path "$KERNVOX_INSTALL_DIR" 2>/dev/null || true)"
+        is_installation_root "$install_root" || {
+            echo "KERNVOX_INSTALL_DIR не указывает на каталог установленного KernvoxHub." >&2
+            return 1
+        }
+
+        printf '%s' "$install_root"
+        return 0
+    fi
+
+    install_root="$(load_root_from_state_file 2>/dev/null || true)"
+    if is_installation_root "$install_root"; then
+        printf '%s' "$install_root"
+        return 0
+    fi
+
+    install_root="$(detect_root_from_containers 2>/dev/null || true)"
+    if is_installation_root "$install_root"; then
+        printf '%s' "$install_root"
+        return 0
+    fi
+
+    return 1
+}
+
+usage() {
+    cat <<'EOF'
+KernvoxHub CLI
+
+Usage:
+  kernvoxhub              Show installation status and offer update.
+  kernvoxhub help         Show this help.
+  kernvoxhub status       Show Docker Compose service status.
+  kernvoxhub update [...] Run project update.sh with git pull/rebuild flow.
+  kernvoxhub logs [svc]   Show docker compose logs (-f), optionally for one service.
+EOF
+}
+
+compose_exec() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose "$@"
+    else
+        return 1
+    fi
+}
+
+print_header() {
+    echo "========================================"
+    echo "  KernvoxHub CLI"
+    echo "========================================"
+}
+
+show_status() {
+    local install_root="$1"
+    local branch_name=""
+    local commit_hash=""
+
+    echo "📁 Установка: ${install_root}"
+
+    if command -v git >/dev/null 2>&1 && [ -d "${install_root}/.git" ]; then
+        branch_name="$(git -C "$install_root" branch --show-current 2>/dev/null || true)"
+        commit_hash="$(git -C "$install_root" rev-parse --short HEAD 2>/dev/null || true)"
+
+        [ -n "$branch_name" ] && echo "🌿 Ветка: ${branch_name}"
+        [ -n "$commit_hash" ] && echo "🔖 Коммит: ${commit_hash}"
+    fi
+
+    echo ""
+    echo "📊 Сервисы:"
+    (
+        cd "$install_root"
+        compose_exec ps
+    ) || echo "  Docker Compose недоступен или сервисы ещё не запускались."
+}
+
+run_update() {
+    local install_root="$1"
+    shift
+
+    export KERNVOX_INSTALL_DIR="$install_root"
+    exec "${install_root}/update.sh" "$@"
+}
+
+run_logs() {
+    local install_root="$1"
+    shift
+
+    cd "$install_root"
+    compose_exec logs -f "$@" || {
+        echo "Docker Compose не найден." >&2
+        exit 1
+    }
+}
+
+interactive_menu() {
+    local install_root="$1"
+    local answer=""
+
+    echo ""
+    echo "Команды:"
+    echo "  kernvoxhub update"
+    echo "  kernvoxhub status"
+    echo "  kernvoxhub logs [service]"
+    echo ""
+
+    read -r -p "Запустить обновление сейчас? [y/N]: " answer || answer="n"
+    case "${answer:-n}" in
+        y|Y|yes|YES)
+            run_update "$install_root"
+            ;;
+        *)
+            echo "Обновление не запускалось."
+            ;;
+    esac
+}
+
+main() {
+    local install_root=""
+    local command="${1:-}"
+
+    case "$command" in
+        help|-h|--help)
+            usage
+            exit 0
+            ;;
+    esac
+
+    install_root="$(resolve_installation_root)" || {
+        echo "Не удалось определить каталог установки KernvoxHub. Запустите setup.sh в каталоге проекта или задайте KERNVOX_INSTALL_DIR=/path/to/KernvoxHub." >&2
+        exit 1
+    }
+
+    export KERNVOX_INSTALL_DIR="$install_root"
+
+    case "$command" in
+        "" )
+            print_header
+            echo ""
+            show_status "$install_root"
+            interactive_menu "$install_root"
+            ;;
+        status)
+            show_status "$install_root"
+            ;;
+        update)
+            shift
+            run_update "$install_root" "$@"
+            ;;
+        logs)
+            shift
+            run_logs "$install_root" "$@"
+            ;;
+        *)
+            echo "Неизвестная команда: ${command}" >&2
+            echo "" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

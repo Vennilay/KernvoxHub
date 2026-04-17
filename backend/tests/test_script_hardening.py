@@ -16,6 +16,8 @@ def find_repo_root() -> Path:
 
 REPO_ROOT = find_repo_root()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+KERNVOX_CLI = SCRIPTS_DIR / "kernvoxhub"
+UPDATE_LAUNCHER = SCRIPTS_DIR / "kernvoxhub-update"
 
 
 def run_shell(script: str, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -100,6 +102,7 @@ class SetupScriptTestCase(unittest.TestCase):
                 f"""
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
+                unset CORS_ORIGINS
                 collect_configuration <<'EOF'
 localhost
 bad-email
@@ -206,6 +209,23 @@ class UpdateScriptTestCase(unittest.TestCase):
         finally:
             script_copy.unlink(missing_ok=True)
 
+    def test_parse_args_supports_install_dir(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                parse_args --install-dir /srv/kernvox --skip-git
+                printf '%s|%s\\n' "$INSTALL_DIR_OVERRIDE" "$SKIP_GIT_UPDATE"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "/srv/kernvox|y")
+        finally:
+            script_copy.unlink(missing_ok=True)
+
     def test_update_requires_existing_installation(self) -> None:
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
         env_file = Path(tempfile.mkstemp(prefix="kernvox-update-env.")[1])
@@ -256,6 +276,174 @@ class UpdateScriptTestCase(unittest.TestCase):
             self.assertIn("Рабочее дерево Git содержит незакоммиченные изменения", result.stderr)
         finally:
             script_copy.unlink(missing_ok=True)
+
+    def test_install_dir_override_updates_root_and_env_file(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+        install_root = Path(tempfile.mkdtemp(prefix="kernvox-install-root."))
+        (install_root / "docker-compose.yml").write_text("services:\n")
+        (install_root / "update.sh").write_text("#!/bin/bash\n")
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                INSTALL_DIR_OVERRIDE="{install_root}"
+                apply_installation_root_override
+                printf '%s|%s\\n' "$ROOT_DIR" "$ENV_FILE"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"{install_root}|{install_root / '.env'}")
+        finally:
+            script_copy.unlink(missing_ok=True)
+            shutil.rmtree(install_root, ignore_errors=True)
+
+
+class KernvoxCliTestCase(unittest.TestCase):
+    def test_help_does_not_require_installation(self) -> None:
+        result = run_shell(f'bash "{KERNVOX_CLI}" help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("KernvoxHub CLI", result.stdout)
+        self.assertIn("kernvoxhub update", result.stdout)
+
+    def test_cli_update_uses_saved_installation_path(self) -> None:
+        temp_home = Path(tempfile.mkdtemp(prefix="kernvox-launcher-home."))
+        fake_install = Path(tempfile.mkdtemp(prefix="kernvox-launcher-install."))
+        state_dir = temp_home / ".config" / "kernvoxhub"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install-dir").write_text(f"{fake_install}\n")
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        update_script = fake_install / "update.sh"
+        update_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "printf '%s|%s|%s\\n' \"$KERNVOX_INSTALL_DIR\" \"$1\" \"$2\"\n"
+        )
+        update_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f'HOME="{temp_home}" bash "{KERNVOX_CLI}" update --skip-git --with-ssl'
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"{fake_install}|--skip-git|--with-ssl")
+        finally:
+            shutil.rmtree(temp_home, ignore_errors=True)
+            shutil.rmtree(fake_install, ignore_errors=True)
+
+    def test_cli_shows_status_and_declines_update(self) -> None:
+        temp_home = Path(tempfile.mkdtemp(prefix="kernvox-cli-home."))
+        fake_install = Path(tempfile.mkdtemp(prefix="kernvox-cli-install."))
+        state_dir = temp_home / ".config" / "kernvoxhub"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install-dir").write_text(f"{fake_install}\n")
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        update_script = fake_install / "update.sh"
+        marker_file = fake_install / "update-called"
+        update_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            f"touch '{marker_file}'\n"
+        )
+        update_script.chmod(0o755)
+
+        fake_bin = fake_install / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        docker_script = fake_bin / "docker"
+        docker_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "if [ \"$1\" = \"compose\" ] && [ \"$2\" = \"version\" ]; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$1\" = \"compose\" ] && [ \"$2\" = \"ps\" ]; then\n"
+            "  printf '%s\\n' 'NAME STATUS'\n"
+            "  printf '%s\\n' 'kernvox-backend Up'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n"
+        )
+        docker_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f"printf 'n\\n' | PATH=\"{fake_bin}:$PATH\" HOME=\"{temp_home}\" bash \"{KERNVOX_CLI}\""
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(str(fake_install), result.stdout)
+            self.assertIn("Обновление не запускалось.", result.stdout)
+            self.assertFalse(marker_file.exists())
+        finally:
+            shutil.rmtree(temp_home, ignore_errors=True)
+            shutil.rmtree(fake_install, ignore_errors=True)
+
+    def test_update_launcher_alias_runs_cli_update(self) -> None:
+        temp_home = Path(tempfile.mkdtemp(prefix="kernvox-update-alias-home."))
+        fake_install = Path(tempfile.mkdtemp(prefix="kernvox-update-alias-install."))
+        state_dir = temp_home / ".config" / "kernvoxhub"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install-dir").write_text(f"{fake_install}\n")
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        update_script = fake_install / "update.sh"
+        update_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "printf '%s|%s\\n' \"$KERNVOX_INSTALL_DIR\" \"$1\"\n"
+        )
+        update_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f'HOME="{temp_home}" bash "{UPDATE_LAUNCHER}" --skip-git'
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"{fake_install}|--skip-git")
+        finally:
+            shutil.rmtree(temp_home, ignore_errors=True)
+            shutil.rmtree(fake_install, ignore_errors=True)
+
+    def test_cli_detects_installation_path_from_docker_mounts(self) -> None:
+        temp_dir = Path(tempfile.mkdtemp(prefix="kernvox-launcher-docker."))
+        fake_install = temp_dir / "install"
+        fake_install.mkdir(parents=True, exist_ok=True)
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        (fake_install / "nginx").mkdir(parents=True, exist_ok=True)
+        update_script = fake_install / "update.sh"
+        update_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "printf '%s\\n' \"$KERNVOX_INSTALL_DIR\"\n"
+        )
+        update_script.chmod(0o755)
+
+        fake_bin = temp_dir / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        docker_script = fake_bin / "docker"
+        docker_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "if [ \"$1\" = \"inspect\" ] && [ \"$2\" = \"--format\" ] && [ \"$4\" = \"kernvox-nginx\" ]; then\n"
+            f"  printf '%s\\n' '{fake_install / 'nginx'}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n"
+        )
+        docker_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f'PATH="{fake_bin}:$PATH" HOME="{temp_dir}" bash "{KERNVOX_CLI}" update',
+                cwd=temp_dir,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(fake_install))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class SslSetupScriptTestCase(unittest.TestCase):

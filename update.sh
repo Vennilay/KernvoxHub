@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
+INSTALL_DIR_OVERRIDE=""
 UPDATE_REF=""
 SKIP_GIT_UPDATE="n"
 RUN_SSL_UPDATE="n"
@@ -20,6 +21,7 @@ usage() {
 Usage: ./update.sh [options]
 
 Options:
+  --install-dir <path> Use an installed KernvoxHub directory from any current path.
   --ref <git-ref>   Switch to a branch/tag/commit before restart.
   --skip-git        Do not run git fetch/pull; only rebuild and restart services.
   --with-ssl        Run scripts/ssl-setup.sh after update.
@@ -30,7 +32,7 @@ EOF
 load_existing_env() {
     [ -f "$ENV_FILE" ] || die ".env файл не найден. Сначала запустите setup.sh."
     load_env_file "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
+    chmod 600 "$ENV_FILE" 2>/dev/null || warn "Не удалось обновить права доступа для ${ENV_FILE}; продолжаю с текущими правами."
 }
 
 print_runtime_info() {
@@ -41,6 +43,11 @@ print_runtime_info() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
+            --install-dir)
+                [ "$#" -ge 2 ] || die "Флаг --install-dir требует путь к каталогу инсталляции."
+                INSTALL_DIR_OVERRIDE="$2"
+                shift 2
+                ;;
             --ref)
                 [ "$#" -ge 2 ] || die "Флаг --ref требует значение."
                 UPDATE_REF="$2"
@@ -63,6 +70,20 @@ parse_args() {
                 ;;
         esac
     done
+}
+
+apply_installation_root_override() {
+    [ -n "$INSTALL_DIR_OVERRIDE" ] || return 0
+
+    ROOT_DIR="$(normalize_directory_path "$INSTALL_DIR_OVERRIDE")" || \
+        die "Каталог инсталляции '${INSTALL_DIR_OVERRIDE}' не найден или недоступен."
+    [ -f "${ROOT_DIR}/docker-compose.yml" ] || \
+        die "В ${ROOT_DIR} не найден docker-compose.yml. Укажите каталог установленного KernvoxHub."
+    [ -f "${ROOT_DIR}/update.sh" ] || \
+        die "В ${ROOT_DIR} не найден update.sh. Укажите каталог установленного KernvoxHub."
+
+    ENV_FILE="${ROOT_DIR}/.env"
+    cd "$ROOT_DIR"
 }
 
 ensure_existing_installation() {
@@ -147,6 +168,7 @@ main() {
     local compose_cmd_string=""
 
     parse_args "$@"
+    apply_installation_root_override
 
     section "KernvoxHub Update"
     echo ""
@@ -161,6 +183,8 @@ main() {
     update_source_code
     echo ""
     restart_stack
+    echo ""
+    configure_update_command
     echo ""
     maybe_update_ssl
 
@@ -177,6 +201,12 @@ main() {
     if [ "$RUN_SSL_UPDATE" = "y" ]; then
         echo "🔒 HTTPS: https://${DOMAIN}"
     fi
+    echo ""
+    echo "Основная команда управления:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME}"
+    echo ""
+    echo "Следующее обновление:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} update"
     echo ""
     echo "Текущий коммит:"
     echo "  $(git rev-parse --short HEAD 2>/dev/null || echo 'неизвестно')"

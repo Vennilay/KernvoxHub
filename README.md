@@ -77,17 +77,20 @@ chmod +x setup.sh
 - Сгенерирует и сохранит секреты в `.env`
 - Создаст `.env` файл
 - Запустит все сервисы
+- Сохранит путь установки и установит глобальную команду `kernvoxhub`
 
 #### Обновление существующей инсталляции
 
 Для обновления уже установленного KernvoxHub:
 
 ```bash
-chmod +x update.sh
-./update.sh
+kernvoxhub
 ```
 
-Скрипт:
+Команда:
+- Найдет каталог уже установленного проекта без `cd` в папку с `.env`
+- Покажет статус инсталляции и предложит обновление
+- По команде `kernvoxhub update` сама подтянет изменения из Git и перезапустит проект
 - Проверит существующую инсталляцию и корректность `.env`
 - Безопасно подтянет изменения через `git pull --ff-only`
 - Пересоберет и перезапустит сервисы через Docker Compose
@@ -96,9 +99,12 @@ chmod +x update.sh
 Дополнительные варианты:
 
 ```bash
-./update.sh --ref main
-./update.sh --skip-git
-./update.sh --with-ssl
+kernvoxhub help
+kernvoxhub status
+kernvoxhub update --ref main
+kernvoxhub update --with-ssl
+kernvoxhub logs backend
+./update.sh --install-dir /opt/KernvoxHub --skip-git
 ```
 
 #### 3. Проверка
@@ -308,6 +314,8 @@ kernvox-hub/
 │   └── nginx-https.conf         # HTTPS-шаблон nginx
 ├── scripts/
 │   ├── init_db.sql              # TimescaleDB
+│   ├── kernvoxhub               # Основная CLI-команда для оператора
+│   ├── kernvoxhub-update        # Глобальный launcher обновления
 │   ├── ssl-setup.sh             # Выпуск и проверка SSL
 │   └── lib/                     # Общие shell-хелперы installer'а
 ├── docker-compose.yml
