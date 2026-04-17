@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
+from sqlalchemy import desc, func
 from typing import Optional
 from datetime import datetime, timezone
 import logging
@@ -52,29 +52,30 @@ def _connect_and_fetch(
         ssh.close()
 
 
-@router.get("/dashboard", response_model=DashboardResponse)
-def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
-    servers = db.query(Server).filter(Server.is_active == True).all()
-    latest_timestamp_subquery = (
+def _get_latest_metrics(db: Session) -> dict[int, Metric]:
+    latest_metric_ranks = (
         db.query(
-            Metric.server_id.label("server_id"),
-            func.max(Metric.timestamp).label("latest_timestamp"),
+            Metric.id.label("id"),
+            func.row_number().over(
+                partition_by=Metric.server_id,
+                order_by=(Metric.timestamp.desc(), Metric.id.desc()),
+            ).label("row_num"),
         )
-        .group_by(Metric.server_id)
         .subquery()
     )
     latest_metrics = (
         db.query(Metric)
-        .join(
-            latest_timestamp_subquery,
-            and_(
-                Metric.server_id == latest_timestamp_subquery.c.server_id,
-                Metric.timestamp == latest_timestamp_subquery.c.latest_timestamp,
-            ),
-        )
+        .join(latest_metric_ranks, Metric.id == latest_metric_ranks.c.id)
+        .filter(latest_metric_ranks.c.row_num == 1)
         .all()
     )
-    latest_metrics_by_server = {metric.server_id: metric for metric in latest_metrics}
+    return {metric.server_id: metric for metric in latest_metrics}
+
+
+@router.get("/dashboard", response_model=DashboardResponse)
+def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
+    servers = db.query(Server).filter(Server.is_active == True).all()
+    latest_metrics_by_server = _get_latest_metrics(db)
 
     dashboard_servers = []
     available_count = 0
@@ -113,7 +114,7 @@ def get_server_details(server_id: int, db: Session = Depends(get_db)) -> ServerD
     latest_metric = (
         db.query(Metric)
         .filter(Metric.server_id == server_id)
-        .order_by(desc(Metric.timestamp))
+        .order_by(desc(Metric.timestamp), desc(Metric.id))
         .first()
     )
 
@@ -209,7 +210,7 @@ def get_metrics_history(
     if to_date:
         query = query.filter(Metric.timestamp <= to_date)
 
-    metrics = query.order_by(desc(Metric.timestamp)).limit(limit).all()
+    metrics = query.order_by(desc(Metric.timestamp), desc(Metric.id)).limit(limit).all()
 
     return {
         "server_id": server_id,

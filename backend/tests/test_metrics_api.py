@@ -1,4 +1,5 @@
 from fastapi import status
+from datetime import datetime, timezone
 
 
 class TestMetricsAPI:
@@ -40,3 +41,25 @@ class TestMetricsAPI:
         )
         assert response.status_code == status.HTTP_201_CREATED
         assert response.json()["server_id"] == server.id
+
+    def test_current_metrics_prefer_latest_id_when_timestamps_match(self, client, db_session, auth_headers):
+        from models.metric import Metric
+        from models.server import Server
+
+        server = Server(name="test-server", host="192.168.1.100", username="root")
+        db_session.add(server)
+        db_session.commit()
+
+        shared_timestamp = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+        db_session.add_all(
+            [
+                Metric(server_id=server.id, cpu_percent=10.0, ram_percent=20.0, is_available=1, timestamp=shared_timestamp),
+                Metric(server_id=server.id, cpu_percent=30.0, ram_percent=40.0, is_available=1, timestamp=shared_timestamp),
+            ]
+        )
+        db_session.commit()
+
+        response = client.get(f"/api/v1/servers/{server.id}/metrics?limit=1", headers=auth_headers)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()[0]["cpu_percent"] == 30.0
+        assert response.json()[0]["ram_percent"] == 40.0

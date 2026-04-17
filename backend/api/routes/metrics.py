@@ -32,7 +32,7 @@ def get_current_metrics(
     metrics = (
         db.query(Metric)
         .filter(Metric.server_id == server_id)
-        .order_by(Metric.timestamp.desc())
+        .order_by(Metric.timestamp.desc(), Metric.id.desc())
         .limit(limit)
         .all()
     )
@@ -56,7 +56,7 @@ def get_metrics_history(
     if to_date:
         query = query.filter(Metric.timestamp <= to_date)
 
-    metrics = query.order_by(Metric.timestamp.desc()).limit(limit).all()
+    metrics = query.order_by(Metric.timestamp.desc(), Metric.id.desc()).limit(limit).all()
 
     return MetricsHistoryResponse(
         server_id=server_id,
