@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime, timezone
 import logging
 import asyncio
@@ -19,6 +19,8 @@ from schemas.android import (
 )
 from collector.ssh_client import SSHClient, HostKeyMismatchError
 from collector.metrics_fetcher import MetricsFetcher
+from schemas.metric import MetricsSeriesResponse
+from services.metric_series import build_metrics_series_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/android", tags=["android"])
@@ -233,3 +235,39 @@ def get_metrics_history(
             for m in metrics
         ],
     }
+
+
+@router.get("/servers/{server_id}/metrics/timeseries", response_model=MetricsSeriesResponse)
+def get_metrics_timeseries(
+    server_id: int,
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    interval: Literal["raw", "1m", "5m", "15m", "1h", "6h", "1d"] = Query(default="raw"),
+    order: Literal["asc", "desc"] = Query(default="asc"),
+    limit: int = Query(default=200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> MetricsSeriesResponse:
+    server = get_server_or_404(db, server_id, active_only=True)
+
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(status_code=400, detail="'from' must be earlier than or equal to 'to'")
+
+    query = db.query(Metric).filter(Metric.server_id == server_id)
+
+    if from_date:
+        query = query.filter(Metric.timestamp >= from_date)
+    if to_date:
+        query = query.filter(Metric.timestamp <= to_date)
+
+    metrics = query.order_by(desc(Metric.timestamp), desc(Metric.id)).all()
+
+    return build_metrics_series_response(
+        server_id=server_id,
+        server_name=server.name,
+        metrics=metrics,
+        interval=interval,
+        order=order,
+        from_date=from_date,
+        to_date=to_date,
+        limit=limit,
+    )

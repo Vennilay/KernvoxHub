@@ -9,10 +9,11 @@ PROTECTED_ENV_KEYS=(
     INTERNAL_API_KEY
 )
 
+KERNVOX_MAIN_COMMAND_NAME="kernvoxhub"
+KERNVOX_UPDATE_LAUNCHER_NAME="kernvoxhub-update"
+
 ensure_host_dependencies() {
     local family=""
-
-    require_sudo_session "Установщик проверяет системные зависимости и доступ к Docker daemon. Может потребоваться sudo-пароль."
     install_docker_if_missing
 
     if [ "$(uname -s)" = "Linux" ]; then
@@ -27,6 +28,85 @@ ensure_host_dependencies() {
         die "Не найден curl, wget или Python. Один из этих инструментов нужен для health checks installer'а."
     ensure_docker_group_membership
     init_docker_commands
+}
+
+normalize_directory_path() {
+    local dir="$1"
+
+    [ -n "$dir" ] || return 1
+    (
+        cd "$dir" 2>/dev/null && pwd -P
+    )
+}
+
+installation_state_file_path() {
+    if [ -n "${KERNVOX_STATE_FILE:-}" ]; then
+        printf '%s' "$KERNVOX_STATE_FILE"
+        return 0
+    fi
+
+    [ -n "${HOME:-}" ] || return 1
+    printf '%s/%s/install-dir' "${XDG_CONFIG_HOME:-${HOME}/.config}" "kernvoxhub"
+}
+
+remember_installation_root() {
+    local install_root="$1"
+    local normalized_root=""
+    local state_file=""
+    local state_dir=""
+
+    normalized_root="$(normalize_directory_path "$install_root")" || {
+        warn "Не удалось нормализовать путь инсталляции '${install_root}'."
+        return 1
+    }
+
+    state_file="$(installation_state_file_path)" || {
+        warn "Не удалось определить путь для сохранения данных инсталляции."
+        return 1
+    }
+    state_dir="$(dirname "$state_file")"
+
+    mkdir -p "$state_dir" || {
+        warn "Не удалось создать каталог ${state_dir} для данных инсталляции."
+        return 1
+    }
+
+    printf '%s\n' "$normalized_root" > "$state_file" || {
+        warn "Не удалось сохранить путь инсталляции в ${state_file}."
+        return 1
+    }
+
+    chmod 600 "$state_file" 2>/dev/null || true
+    success "Путь инсталляции сохранён в ${state_file}."
+}
+
+install_launcher() {
+    local launcher_name="$1"
+    local launcher_source="${ROOT_DIR}/scripts/${launcher_name}"
+    local launcher_target="/usr/local/bin/${launcher_name}"
+
+    if [ ! -f "$launcher_source" ]; then
+        warn "Файл launcher'а ${launcher_source} не найден; команда ${launcher_name} не установлена."
+        return 1
+    fi
+
+    if [ -f "$launcher_target" ] && cmp -s "$launcher_source" "$launcher_target"; then
+        success "Команда ${launcher_name} уже установлена в ${launcher_target}."
+        return 0
+    fi
+
+    run_privileged install -m 755 "$launcher_source" "$launcher_target" || {
+        warn "Не удалось установить команду ${launcher_name}."
+        return 1
+    }
+
+    success "Команда ${launcher_name} установлена в ${launcher_target}."
+}
+
+configure_update_command() {
+    remember_installation_root "$ROOT_DIR" || true
+    install_launcher "$KERNVOX_MAIN_COMMAND_NAME" || true
+    install_launcher "$KERNVOX_UPDATE_LAUNCHER_NAME" || true
 }
 
 default_compose_project_name() {
