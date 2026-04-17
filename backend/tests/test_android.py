@@ -39,6 +39,42 @@ class TestAndroidDashboard:
         assert data["active_servers"] == 2
         assert len(data["servers"]) == 2
 
+    def test_dashboard_uses_latest_metric_when_timestamps_match(self, client, db_session, auth_headers):
+        from models.server import Server
+        from models.metric import Metric
+
+        server = Server(name="server1", host="192.168.1.1", username="root")
+        db_session.add(server)
+        db_session.commit()
+
+        shared_timestamp = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+        db_session.add_all(
+            [
+                Metric(
+                    server_id=server.id,
+                    cpu_percent=10.0,
+                    ram_percent=20.0,
+                    is_available=1,
+                    timestamp=shared_timestamp,
+                ),
+                Metric(
+                    server_id=server.id,
+                    cpu_percent=30.0,
+                    ram_percent=40.0,
+                    is_available=1,
+                    timestamp=shared_timestamp,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        response = client.get("/api/v1/android/dashboard", headers=auth_headers)
+        assert response.status_code == status.HTTP_200_OK
+
+        data = response.json()
+        assert data["servers"][0]["cpu_percent"] == 30.0
+        assert data["servers"][0]["ram_percent"] == 40.0
+
 
 class TestAndroidServerDetails:
     def test_server_details(self, client, db_session, auth_headers):
@@ -85,6 +121,47 @@ class TestAndroidServerDetails:
 
         response = client.get(f"/api/v1/android/servers/{server.id}/details", headers=auth_headers)
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_server_details_use_latest_metric_when_timestamps_match(self, client, db_session, auth_headers):
+        from models.server import Server
+        from models.metric import Metric
+
+        server = Server(name="test-server", host="192.168.1.1", username="root")
+        db_session.add(server)
+        db_session.commit()
+
+        shared_timestamp = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+        db_session.add_all(
+            [
+                Metric(
+                    server_id=server.id,
+                    cpu_percent=10.0,
+                    ram_used_mb=100.0,
+                    ram_total_mb=200.0,
+                    ram_percent=50.0,
+                    is_available=1,
+                    timestamp=shared_timestamp,
+                ),
+                Metric(
+                    server_id=server.id,
+                    cpu_percent=30.0,
+                    ram_used_mb=120.0,
+                    ram_total_mb=200.0,
+                    ram_percent=60.0,
+                    is_available=1,
+                    timestamp=shared_timestamp,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        response = client.get(f"/api/v1/android/servers/{server.id}/details", headers=auth_headers)
+        assert response.status_code == status.HTTP_200_OK
+
+        data = response.json()
+        assert data["cpu_percent"] == 30.0
+        assert data["ram_used_mb"] == 120.0
+        assert data["ram_percent"] == 60.0
 
 
 class TestAndroidMetricsHistory:
