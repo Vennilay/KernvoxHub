@@ -1,376 +1,210 @@
 # KernvoxHub
 
-**KernvoxHub** — сервер для мониторинга Linux-серверов через SSH с REST API для Kernvox
+KernvoxHub - центральный сервер для мониторинга Linux-серверов и простых операторских действий через SSH. Он собирает метрики, хранит историю и отдаёт данные REST API для Kernvox/Android-клиента.
 
----
+## Что умеет
 
-## 📋 Описание
+- собирать CPU, RAM, disk, network, uptime и список процессов;
+- хранить метрики в PostgreSQL/TimescaleDB;
+- кэшировать API-токены в Redis;
+- подключаться к подчинённым серверам по SSH с проверкой host key;
+- хранить SSH-пароли, приватные ключи и host key в зашифрованном виде;
+- перезагружать сервер через защищённый action endpoint или CLI;
+- обновляться одной командой через `kernvoxhub update`.
 
-KernvoxHub собирает метрики с серверов по SSH, сохраняет историю в базу данных и предоставляет данные через API:
-
-- **CPU** — загрузка процессора
-- **RAM** — использование оперативной памяти
-- **Disk** — использование дискового пространства
-- **Network** — трафик
-- **Processes** — список процессов с потреблением ресурсов
-- **Uptime** — время работы системы
-
----
-
-## 🏗 Архитектура
+## Архитектура
 
 ```
-┌─────────────────┐         ┌─────────────────┐
-│     Kernvox     │ ────── │   KernvoxHub    │
-│                 │  HTTPS  │   (FastAPI)     │
-└─────────────────┘         └────────┬────────┘
-                              SSH     │
-                            ┌─────────┴─────────┐
-                            ↓                   ↓
-                     ┌──────────┐        ┌──────────┐
-                     │ Server 1 │        │ Server N │
-                     └──────────┘        └──────────┘
+Kernvox / Android
+      |
+      | HTTPS + X-API-Key
+      v
+Nginx -> FastAPI backend -> PostgreSQL + Redis
+             |
+             | SSH
+             v
+       Linux servers
 ```
 
-### Компоненты
+Collector работает отдельным контейнером и по расписанию опрашивает все активные серверы. Backend обслуживает API, CLI-команды внутри контейнера и live-действия вроде просмотра процессов или reboot.
 
-| Сервис | Описание |
-|--------|----------|
-| **Backend** | FastAPI REST API |
-| **PostgreSQL + TimescaleDB** | Хранение метрик |
-| **Redis** | Кэширование API токенов |
-| **Collector** | Сбор метрик по расписанию (каждые 60 сек) |
-| **Nginx** | Reverse proxy, SSL termination |
+## Быстрый старт
 
----
-
-## 🚀 Быстрый старт
-
-### Требования
-
-- Docker 20+
-- Docker Compose 2.0+
-- Linux / macOS / Windows (WSL)
-
-### Установка
-
-#### 1. Клонирование репозитория
+Требования: Linux/macOS/WSL, Docker, Docker Compose. Installer может помочь установить недостающие зависимости на популярных Linux-дистрибутивах.
 
 ```bash
 git clone https://github.com/Vennilay/KernvoxHub.git
 cd KernvoxHub
-```
-
-#### 2. Настройка
-
-Запустите скрипт автоматической настройки:
-
-```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-Скрипт:
-- Проверит наличие Docker и Docker Compose
-- Проверит доступность зависимостей для health checks installer'а
-- Запросит домен и email для SSL
-- Сгенерирует и сохранит секреты в `.env`
-- Создаст `.env` файл
-- Запустит все сервисы
-- Сохранит путь установки и установит глобальную команду `kernvoxhub`
+`setup.sh` создаст `.env`, сгенерирует секреты, запустит сервисы и установит системную команду `kernvoxhub`.
 
-#### Обновление существующей инсталляции
+Проверка:
 
-Для обновления уже установленного KernvoxHub:
+```bash
+docker compose ps
+curl http://localhost/api/v1/health
+```
+
+## Добавление сервера
+
+Самый простой путь - интерактивная команда:
+
+```bash
+kernvoxhub add-server --test-connection
+```
+
+CLI спросит имя, адрес, SSH-порт, пользователя и способ входа: пароль или приватный ключ. При `--test-connection` KernvoxHub сразу подключится к серверу и сохранит SSH host key.
+
+Рекомендованный вариант для production:
+
+1. Создайте отдельного пользователя на подчинённом сервере.
+2. Используйте SSH key auth вместо пароля.
+3. Для перезагрузки разрешите только нужную команду через sudoers, например `/sbin/shutdown -r now`, без полного root-доступа.
+
+Полезные команды:
+
+```bash
+kernvoxhub list-servers
+kernvoxhub test-server 1
+kernvoxhub metrics 1
+kernvoxhub reboot-server 1 --yes
+```
+
+## Перезагрузка сервера
+
+Через API:
+
+```bash
+curl -X POST http://localhost/api/v1/servers/1/actions/reboot \
+  -H "X-API-Key: <api_token>" \
+  -H "X-Action-Key: <server_action_token>"
+```
+
+`X-Action-Key` берётся из `.env` переменной `SERVER_ACTION_TOKEN`. Если переменная не задана, destructive endpoints не выполняются: это fail-closed защита от случайного запуска без отдельного action-token.
+
+Ответ при принятой команде:
+
+```json
+{
+  "id": 1,
+  "server_id": 1,
+  "server_name": "production-db-01",
+  "action": "reboot",
+  "status": "accepted",
+  "message": "Reboot command accepted by server",
+  "created_at": "2026-05-09T12:00:00Z"
+}
+```
+
+История действий:
+
+```bash
+curl http://localhost/api/v1/servers/1/actions \
+  -H "X-API-Key: <api_token>"
+```
+
+## API
+
+Все непубличные endpoints требуют:
+
+```http
+X-API-Key: <api_token>
+```
+
+Основные endpoints:
+
+| Метод | Endpoint | Назначение |
+|---|---|---|
+| `GET` | `/api/v1/health` | Health check |
+| `GET` | `/api/v1/servers` | Список серверов |
+| `POST` | `/api/v1/servers` | Добавить сервер |
+| `GET` | `/api/v1/servers/{id}` | Карточка сервера |
+| `PUT` | `/api/v1/servers/{id}` | Обновить сервер |
+| `DELETE` | `/api/v1/servers/{id}` | Деактивировать сервер |
+| `GET` | `/api/v1/servers/{id}/metrics` | Последние метрики |
+| `GET` | `/api/v1/servers/{id}/metrics/history` | История метрик |
+| `GET` | `/api/v1/servers/{id}/metrics/timeseries` | Агрегированная серия |
+| `POST` | `/api/v1/servers/{id}/actions/reboot` | Перезагрузка сервера |
+| `GET` | `/api/v1/servers/{id}/actions` | Аудит действий |
+
+Android endpoints:
+
+| Метод | Endpoint |
+|---|---|
+| `GET` | `/api/v1/android/dashboard` |
+| `GET` | `/api/v1/android/servers/{id}/details` |
+| `GET` | `/api/v1/android/servers/{id}/processes` |
+| `GET` | `/api/v1/android/servers/{id}/metrics/history` |
+| `GET` | `/api/v1/android/servers/{id}/metrics/timeseries` |
+
+## Обновление
+
+После установки `kernvoxhub` сам проверяет наличие новой версии и предлагает обновиться:
 
 ```bash
 kernvoxhub
 ```
 
-Команда:
-- Найдет каталог уже установленного проекта без `cd` в папку с `.env`
-- Покажет статус инсталляции и предложит обновление
-- По команде `kernvoxhub update` сама подтянет изменения из Git и перезапустит проект
-- Проверит существующую инсталляцию и корректность `.env`
-- Безопасно подтянет изменения через `git pull --ff-only`
-- Пересоберет и перезапустит сервисы через Docker Compose
-- Дождется health checks backend, nginx и collector
-
-Дополнительные варианты:
+Можно проверить и запустить обновление явно:
 
 ```bash
-kernvoxhub help
+kernvoxhub check-update
+kernvoxhub update
 kernvoxhub status
-kernvoxhub update --ref main
-kernvoxhub update --with-ssl
 kernvoxhub logs backend
-./update.sh --install-dir /opt/KernvoxHub --skip-git
 ```
 
-#### 3. Проверка
+Обычный сценарий не требует выбирать ветки или коммиты. Updater проверяет опубликованную версию, обновляет файлы проекта, пересобирает контейнеры и ждёт health checks. Если в старом `.env` нет новых runtime-секретов, например `SERVER_ACTION_TOKEN`, updater добавит их сам.
+
+Для обслуживания без скачивания новой версии есть технический режим:
 
 ```bash
-docker-compose ps
+kernvoxhub update --skip-git
 ```
 
-Все сервисы должны быть в статусе `Up`.
+## Конфигурация
 
----
+Главные переменные `.env`:
 
-## 📡 API Reference
+| Переменная | Для чего нужна |
+|---|---|
+| `POSTGRES_PASSWORD` | пароль PostgreSQL |
+| `API_TOKEN` | bootstrap API-токен |
+| `SERVER_ACTION_TOKEN` | отдельный ключ для destructive actions |
+| `ENCRYPTION_KEY` | Fernet-ключ для шифрования SSH-секретов |
+| `REDIS_PASSWORD` | пароль Redis |
+| `INTERNAL_API_KEY` | ключ для внутренних записывающих endpoints |
+| `CORS_ORIGINS` | разрешённые origins |
+| `COLLECTOR_INTERVAL` | интервал опроса серверов |
+| `DOMAIN`, `EMAIL` | домен и email для SSL |
 
-### Аутентификация
+Не коммитьте `.env`, приватные ключи, сертификаты и дампы базы.
 
-Все запросы к API требуют заголовок `X-API-Key`:
-
-```http
-X-API-Key: ваш_api_токен
-```
-
-Bootstrap-токен генерируется при установке и хранится в `.env` как `API_TOKEN`.
-Команда `generate-token` выпускает дополнительные случайные токены независимо от `API_SECRET`.
-
-### Endpoints
-
-#### Основные
-
-| Метод | Endpoint | Описание |
-|-------|----------|----------|
-| `GET` | `/api/v1/health` | Проверка работоспособности |
-| `GET` | `/api/v1/servers` | Список серверов |
-| `POST` | `/api/v1/servers` | Добавить сервер |
-| `GET` | `/api/v1/servers/{id}` | Детали сервера |
-| `PUT` | `/api/v1/servers/{id}` | Обновить сервер |
-| `DELETE` | `/api/v1/servers/{id}` | Удалить сервер |
-
-#### Android API
-
-| Метод | Endpoint | Описание |
-|-------|----------|----------|
-| `GET` | `/api/v1/android/dashboard` | Сводка по всем серверам |
-| `GET` | `/api/v1/android/servers/{id}/details` | Полная информация о сервере |
-| `GET` | `/api/v1/android/servers/{id}/processes` | Запущенные процессы |
-| `GET` | `/api/v1/android/servers/{id}/metrics/history` | История метрик |
-
-### Примеры использования
-
-#### Health check
+## Разработка
 
 ```bash
-curl http://localhost/api/v1/health
+pytest -v
+pytest backend/tests/test_api.py
+docker compose up -d --build
+docker compose logs -f backend
 ```
 
-**Ответ:**
-```json
-{"status": "ok", "version": "1.0.0"}
-```
+Тесты лежат в `backend/tests/` и разнесены по назначению:
 
-#### Добавить сервер
+- `backend/tests/api/` - API и middleware;
+- `backend/tests/unit/` - чистые сервисы, парсеры, encryption, SSH helpers;
+- `backend/tests/cli/` - команды `python -m cli.main`;
+- `backend/tests/scripts/` - installer, updater и shell wrappers.
 
-```bash
-curl -X POST http://localhost/api/v1/servers \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: ваш_api_ключ" \
-  -d '{
-    "name": "production-db-01",
-    "host": "192.168.1.100",
-    "port": 22,
-    "username": "root",
-    "password": "secret123"
-  }'
-```
+Каждый тест содержит docstring с назначением сценария. При изменениях в SSH, auth, encryption, reboot или installer/update добавляйте регрессионные тесты рядом с затронутым поведением.
 
-#### Получить список серверов
+## Безопасность
 
-```bash
-curl http://localhost/api/v1/servers \
-  -H "X-API-Key: ваш_api_ключ"
-```
-
-#### Dashboard (сводка)
-
-```bash
-curl http://localhost/api/v1/android/dashboard \
-  -H "X-API-Key: ваш_api_ключ"
-```
-
-**Ответ:**
-```json
-{
-  "total_servers": 2,
-  "active_servers": 2,
-  "available_servers": 1,
-  "servers": [
-    {
-      "id": 1,
-      "name": "production-db-01",
-      "host": "192.168.1.100",
-      "is_active": true,
-      "is_available": true,
-      "cpu_percent": 45.2,
-      "ram_percent": 62.5,
-      "disk_used_percent": 71.0,
-      "last_update": "2026-03-28T10:00:00Z"
-    }
-  ],
-  "timestamp": "2026-03-28T10:00:00Z"
-}
-```
-
----
-
-## 🔧 CLI утилиты
-
-KernvoxHub включает CLI для управления:
-
-```bash
-# Запуск из контейнера
-docker-compose exec backend python -m cli.main --help
-```
-
-### Команды
-
-| Команда | Описание |
-|---------|----------|
-| `generate-token` | Выпуск нового API токена |
-| `status` | Статус системы |
-| `list-servers` | Список серверов |
-| `add-server` | Добавить сервер (интерактивно) |
-| `delete-server <ID>` | Удалить сервер |
-| `metrics <ID>` | Последние метрики сервера |
-
-### Примеры
-
-```bash
-# Статус системы
-docker-compose exec backend python -m cli.main status
-
-# Добавить сервер
-docker-compose exec backend python -m cli.main add-server
-
-# Просмотр метрик
-docker-compose exec backend python -m cli.main metrics 1 --limit 5
-```
-
----
-
-## 🔒 SSL / HTTPS
-
-### Получение сертификата Let's Encrypt
-
-Для production-окружения:
-
-```bash
-./scripts/ssl-setup.sh
-```
-
-**Требования:**
-- Доменное имя, указывающее на ваш сервер
-- Открытые порты 80 и 443
-
----
-
-## 📊 Структура проекта
-
-```
-kernvox-hub/
-├── backend/
-│   ├── api/
-│   │   ├── middleware/
-│   │   │   └── auth.py          # API Key аутентификация
-│   │   └── routes/
-│   │       ├── servers.py       # CRUD серверов
-│   │       ├── metrics.py       # Метрики
-│   │       └── android.py       # Android API
-│   ├── cli/
-│   │   └── main.py              # CLI утилиты
-│   ├── collector/
-│   │   ├── ssh_client.py        # SSH подключение
-│   │   ├── metrics_fetcher.py   # Сбор метрик
-│   │   └── scheduler.py         # Планировщик
-│   ├── models/
-│   │   ├── database.py          # SQLAlchemy
-│   │   ├── server.py            # Модель Server
-│   │   └── metric.py            # Модель Metric
-│   ├── schemas/
-│   │   ├── server.py            # Pydantic схемы
-│   │   ├── metric.py
-│   │   └── android.py
-│   ├── services/
-│   │   ├── redis_client.py      # Redis
-│   │   └── token_manager.py     # API токены
-│   ├── tests/
-│   │   ├── conftest.py
-│   │   ├── test_api.py
-│   │   ├── test_android.py
-│   │   └── test_metrics_api.py
-│   ├── config.py                # Настройки
-│   ├── main.py                  # FastAPI приложение
-│   ├── Dockerfile
-│   └── requirements.txt
-├── nginx/
-│   ├── entrypoint.sh            # Рендер и reload nginx-конфига
-│   ├── nginx.conf               # HTTP-шаблон nginx
-│   └── nginx-https.conf         # HTTPS-шаблон nginx
-├── scripts/
-│   ├── init_db.sql              # TimescaleDB
-│   ├── kernvoxhub               # Основная CLI-команда для оператора
-│   ├── kernvoxhub-update        # Глобальный launcher обновления
-│   ├── ssl-setup.sh             # Выпуск и проверка SSL
-│   └── lib/                     # Общие shell-хелперы installer'а
-├── docker-compose.yml
-├── setup.sh
-├── .env.example
-└── README.md
-```
-
----
-
-## 🧪 Тестирование
-
-```bash
-# Запуск тестов
-docker-compose exec backend pytest
-
-# С покрытием
-docker-compose exec backend pytest --cov=backend --cov-report=html
-```
-
----
-
-## 🔐 Безопасность
-
-### Переменные окружения
-
-Все секреты хранятся в `.env` (не добавляется в Git):
-
-```bash
-POSTGRES_PASSWORD=secure_random_string
-API_SECRET=another_secure_random_string
-API_TOKEN=kvx_random_api_token
-COLLECTOR_INTERVAL=60
-DOMAIN=your-domain.com
-EMAIL=admin@example.com
-```
-
-
-## 🛠 Технологический стек
-
-| Компонент | Технология |
-|-----------|------------|
-| **Язык** | Python 3.11+ |
-| **Framework** | FastAPI |
-| **База данных** | PostgreSQL 16 + TimescaleDB |
-| **Кэш** | Redis 7 |
-| **SSH** | Paramiko |
-| **Планировщик** | APScheduler |
-| **Web-сервер** | Nginx |
-| **Контейнеры** | Docker, Docker Compose |
-
----
-
-## 📝 Лицензия
-
-Проект создан в рамках программы Samsung Academy.
-
----
+- SSH host key сохраняется при первом успешном подключении и затем проверяется при каждом новом подключении.
+- Пароли, приватные SSH-ключи и host key хранятся в базе зашифрованными через Fernet.
+- API закрыт `X-API-Key`, а destructive actions дополнительно закрываются `X-Action-Key`. Если `SERVER_ACTION_TOKEN` не настроен, destructive endpoints отказывают в выполнении.
+- Для reboot используйте отдельного SSH-пользователя и минимальные sudoers-права.
+- При смене host/port у сервера сохранённый host key сбрасывается, чтобы не доверять старому ключу для нового адреса.

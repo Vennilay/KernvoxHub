@@ -104,6 +104,10 @@ collect_configuration() {
         API_TOKEN="$(generate_api_token_value)"
     fi
 
+    if [ -z "${SERVER_ACTION_TOKEN:-}" ]; then
+        SERVER_ACTION_TOKEN="$(generate_hex_secret)"
+    fi
+
     if [ -z "${ENCRYPTION_KEY:-}" ]; then
         ENCRYPTION_KEY="$(generate_fernet_key)"
     fi
@@ -132,6 +136,7 @@ write_env_file() {
     upsert_env_value "$ENV_FILE" "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
     upsert_env_value "$ENV_FILE" "API_SECRET" "$API_SECRET"
     upsert_env_value "$ENV_FILE" "API_TOKEN" "$API_TOKEN"
+    upsert_env_value "$ENV_FILE" "SERVER_ACTION_TOKEN" "$SERVER_ACTION_TOKEN"
     upsert_env_value "$ENV_FILE" "ENCRYPTION_KEY" "$ENCRYPTION_KEY"
     upsert_env_value "$ENV_FILE" "REDIS_PASSWORD" "$REDIS_PASSWORD"
     upsert_env_value "$ENV_FILE" "INTERNAL_API_KEY" "$INTERNAL_API_KEY"
@@ -232,10 +237,13 @@ main() {
     echo "  ${compose_cmd_string}exec backend python -m cli.main generate-token"
     echo ""
     echo "Добавить сервер интерактивно:"
-    echo "  ${compose_cmd_string}exec backend python -m cli.main add-server"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} add-server --test-connection"
     echo ""
-    echo "Посмотреть список серверов:"
-    echo "  ${compose_cmd_string}exec backend python -m cli.main list-servers"
+    echo "Список серверов:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} list-servers"
+    echo ""
+    echo "Перезагрузить сервер:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} reboot-server <ID> --yes"
     echo ""
     echo "Для остановки:"
     echo "  ${compose_cmd_string}down"

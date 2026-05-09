@@ -15,6 +15,11 @@ class _WorkingKey:
 
 
 def test_load_private_key_skips_missing_dss(monkeypatch):
+    """Проверяет загрузку SSH private key при отсутствии DSSKey в Paramiko.
+
+    Что делает: monkeypatch-ит key loaders так, что Ed25519/RSA падают, ECDSA успешен, а DSSKey отсутствует.
+    Ожидаемая реакция: SSHClient пропускает отсутствующий DSSKey и возвращает первый успешно загруженный ключ.
+    """
     monkeypatch.setattr(ssh_client_module.paramiko, "Ed25519Key", _FailingKey)
     monkeypatch.setattr(ssh_client_module.paramiko, "ECDSAKey", _WorkingKey)
     monkeypatch.setattr(ssh_client_module.paramiko, "RSAKey", _FailingKey)

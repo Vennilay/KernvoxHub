@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional
 from datetime import datetime
 
@@ -14,6 +14,12 @@ class ServerCreate(ServerBase):
     ssh_key: Optional[str] = None
     password: Optional[str] = None
 
+    @model_validator(mode="after")
+    def validate_credentials(self):
+        if bool(self.password) == bool(self.ssh_key):
+            raise ValueError("Provide exactly one SSH credential: password or ssh_key")
+        return self
+
 
 class ServerUpdate(BaseModel):
     name: Optional[str] = None
@@ -23,6 +29,12 @@ class ServerUpdate(BaseModel):
     ssh_key: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_credentials(self):
+        if self.password and self.ssh_key:
+            raise ValueError("Provide only one SSH credential: password or ssh_key")
+        return self
 
 
 class ServerResponse(ServerBase):

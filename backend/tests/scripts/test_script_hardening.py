@@ -47,6 +47,11 @@ def make_script_copy(source: Path) -> Path:
 
 class EnvHelpersTestCase(unittest.TestCase):
     def test_load_env_file_treats_values_as_data(self) -> None:
+        """Проверяет безопасную загрузку `.env` как данных, а не shell-кода.
+
+        Что делает: создаёт env-файл со значением вида `$(touch ...)`, загружает его через `load_env_file` и проверяет переменные.
+        Ожидаемая реакция: значение сохраняется как строка, команда не выполняется, файл-маркер атаки не появляется.
+        """
         env_file = Path(tempfile.mkstemp(prefix="kernvox-env.")[1])
         env_file.write_text(
             "DOMAIN=example.com\n"
@@ -73,6 +78,11 @@ class EnvHelpersTestCase(unittest.TestCase):
             Path("/tmp/kernvox-script-test-should-not-exist").unlink(missing_ok=True)
 
     def test_upsert_env_value_updates_existing_keys(self) -> None:
+        """Проверяет безопасное обновление ключей в `.env`.
+
+        Что делает: вызывает `upsert_env_value` для существующего `DOMAIN` и нового `INTERNAL_API_KEY`.
+        Ожидаемая реакция: файл содержит обновлённые значения, не дублирует ключи и получает права `600`.
+        """
         env_file = Path(tempfile.mkstemp(prefix="kernvox-upsert.")[1])
         env_file.write_text("DOMAIN=localhost\nEMAIL=admin@example.com\n")
 
@@ -95,6 +105,11 @@ class EnvHelpersTestCase(unittest.TestCase):
 
 class SetupScriptTestCase(unittest.TestCase):
     def test_collect_configuration_reprompts_until_valid_values(self) -> None:
+        """Проверяет повторный запрос настроек installer при невалидном вводе.
+
+        Что делает: подаёт в `collect_configuration` плохой email, затем корректный domain/email/interval.
+        Ожидаемая реакция: installer сообщает об ошибке, повторяет ввод и в итоге выставляет валидные DOMAIN, EMAIL, INTERVAL и CORS.
+        """
         script_copy = make_script_copy(REPO_ROOT / "setup.sh")
 
         try:
@@ -125,6 +140,11 @@ EOF
             script_copy.unlink(missing_ok=True)
 
     def test_existing_installation_requires_all_persisted_secrets(self) -> None:
+        """Проверяет защиту существующей инсталляции от потери секретов.
+
+        Что делает: имитирует уже созданные Docker-ресурсы и `.env` без критичных секретов.
+        Ожидаемая реакция: installer завершает работу с ошибкой и перечисляет отсутствующие секреты, чтобы не сломать доступ к БД/шифрованию.
+        """
         script_copy = make_script_copy(REPO_ROOT / "setup.sh")
         env_file = Path(tempfile.mkstemp(prefix="kernvox-setup-env.")[1])
         env_file.write_text("DOMAIN=example.com\nEMAIL=ops@example.com\n")
@@ -155,6 +175,11 @@ EOF
             env_file.unlink(missing_ok=True)
 
     def test_existing_installation_accepts_complete_secret_set(self) -> None:
+        """Проверяет успешную загрузку полного набора секретов существующей инсталляции.
+
+        Что делает: создаёт `.env` со всеми защищёнными ключами и запускает проверку `ensure_existing_installation_secrets`.
+        Ожидаемая реакция: проверка проходит без ошибки, а значения остаются теми же, без регенерации.
+        """
         script_copy = make_script_copy(REPO_ROOT / "setup.sh")
         env_file = Path(tempfile.mkstemp(prefix="kernvox-setup-env.")[1])
         env_file.write_text(
@@ -192,7 +217,12 @@ EOF
 
 
 class UpdateScriptTestCase(unittest.TestCase):
-    def test_parse_args_supports_ref_skip_git_and_ssl(self) -> None:
+    def test_parse_args_supports_skip_git_and_ssl(self) -> None:
+        """Проверяет технические флаги updater без сценария выбора коммитов.
+
+        Что делает: вызывает `parse_args --skip-git --with-ssl`.
+        Ожидаемая реакция: updater включает rebuild-only режим и SSL-шаг, не требуя ref/branch от пользователя.
+        """
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
 
         try:
@@ -200,16 +230,21 @@ class UpdateScriptTestCase(unittest.TestCase):
                 f"""
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
-                parse_args --ref main --skip-git --with-ssl
-                printf '%s|%s|%s\\n' "$UPDATE_REF" "$SKIP_GIT_UPDATE" "$RUN_SSL_UPDATE"
+                parse_args --skip-git --with-ssl
+                printf '%s|%s\\n' "$SKIP_GIT_UPDATE" "$RUN_SSL_UPDATE"
                 """
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "main|y|y")
+            self.assertEqual(result.stdout.strip(), "y|y")
         finally:
             script_copy.unlink(missing_ok=True)
 
     def test_parse_args_supports_install_dir(self) -> None:
+        """Проверяет указание каталога установленного проекта для updater.
+
+        Что делает: вызывает `parse_args --install-dir /srv/kernvox --skip-git`.
+        Ожидаемая реакция: updater сохраняет override пути и включает режим без скачивания новой версии.
+        """
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
 
         try:
@@ -227,6 +262,11 @@ class UpdateScriptTestCase(unittest.TestCase):
             script_copy.unlink(missing_ok=True)
 
     def test_update_requires_existing_installation(self) -> None:
+        """Проверяет запрет update до первичной установки.
+
+        Что делает: имитирует отсутствие Docker-контейнеров/volume существующей инсталляции и вызывает `ensure_existing_installation`.
+        Ожидаемая реакция: updater завершается ошибкой с сообщением, что для первого запуска нужен `setup.sh`.
+        """
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
         env_file = Path(tempfile.mkstemp(prefix="kernvox-update-env.")[1])
         env_file.write_text(
@@ -255,7 +295,47 @@ class UpdateScriptTestCase(unittest.TestCase):
             script_copy.unlink(missing_ok=True)
             env_file.unlink(missing_ok=True)
 
+    def test_update_adds_missing_server_action_token(self) -> None:
+        """Проверяет миграцию старого `.env` на новый action-token.
+
+        Что делает: загружает `.env` без `SERVER_ACTION_TOKEN`, подменяет генератор секрета и вызывает `ensure_runtime_env_defaults`.
+        Ожидаемая реакция: updater добавляет `SERVER_ACTION_TOKEN` в файл и экспортирует его для последующего запуска контейнеров.
+        """
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+        env_file = Path(tempfile.mkstemp(prefix="kernvox-update-env.")[1])
+        env_file.write_text(
+            "POSTGRES_PASSWORD=db-secret\n"
+            "API_SECRET=api-secret\n"
+            "API_TOKEN=kvx-bootstrap-token\n"
+            "ENCRYPTION_KEY=encryption-secret\n"
+            "REDIS_PASSWORD=redis-secret\n"
+            "INTERNAL_API_KEY=internal-secret\n"
+        )
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ENV_FILE="{env_file}"
+                load_existing_env
+                unset SERVER_ACTION_TOKEN
+                generate_hex_secret() {{ printf '%s' action-secret; }}
+                ensure_runtime_env_defaults
+                grep -Fx SERVER_ACTION_TOKEN=action-secret "{env_file}"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+            env_file.unlink(missing_ok=True)
+
     def test_update_rejects_dirty_git_worktree(self) -> None:
+        """Проверяет защиту updater от локально изменённых файлов.
+
+        Что делает: подменяет `git diff` так, чтобы рабочее дерево считалось грязным, и вызывает `ensure_clean_git_worktree`.
+        Ожидаемая реакция: updater останавливается с понятной ошибкой, чтобы автоматическое обновление не затёрло локальные правки.
+        """
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
 
         try:
@@ -273,11 +353,16 @@ class UpdateScriptTestCase(unittest.TestCase):
                 """
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Рабочее дерево Git содержит незакоммиченные изменения", result.stderr)
+            self.assertIn("В файлах проекта есть локальные изменения", result.stderr)
         finally:
             script_copy.unlink(missing_ok=True)
 
     def test_install_dir_override_updates_root_and_env_file(self) -> None:
+        """Проверяет применение `--install-dir` к root и `.env` путям.
+
+        Что делает: создаёт fake installation root и вызывает `apply_installation_root_override`.
+        Ожидаемая реакция: `ROOT_DIR` и `ENV_FILE` указывают на выбранную инсталляцию, а не на каталог запуска теста.
+        """
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
         install_root = Path(tempfile.mkdtemp(prefix="kernvox-install-root."))
         (install_root / "docker-compose.yml").write_text("services:\n")
@@ -302,12 +387,23 @@ class UpdateScriptTestCase(unittest.TestCase):
 
 class KernvoxCliTestCase(unittest.TestCase):
     def test_help_does_not_require_installation(self) -> None:
+        """Проверяет, что `kernvoxhub help` работает без установленного проекта.
+
+        Что делает: запускает wrapper с командой `help`, не создавая state-файл и контейнеры.
+        Ожидаемая реакция: команда возвращает `0` и показывает help, включая `check-update` и `update`.
+        """
         result = run_shell(f'bash "{KERNVOX_CLI}" help')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("KernvoxHub CLI", result.stdout)
+        self.assertIn("kernvoxhub check-update", result.stdout)
         self.assertIn("kernvoxhub update", result.stdout)
 
     def test_cli_update_uses_saved_installation_path(self) -> None:
+        """Проверяет запуск updater из сохранённого installation path.
+
+        Что делает: создаёт state-файл `install-dir`, fake `update.sh` и запускает `kernvoxhub update --skip-git --with-ssl`.
+        Ожидаемая реакция: wrapper передаёт `KERNVOX_INSTALL_DIR` и аргументы в updater выбранной инсталляции.
+        """
         temp_home = Path(tempfile.mkdtemp(prefix="kernvox-launcher-home."))
         fake_install = Path(tempfile.mkdtemp(prefix="kernvox-launcher-install."))
         state_dir = temp_home / ".config" / "kernvoxhub"
@@ -333,7 +429,12 @@ class KernvoxCliTestCase(unittest.TestCase):
             shutil.rmtree(temp_home, ignore_errors=True)
             shutil.rmtree(fake_install, ignore_errors=True)
 
-    def test_cli_shows_status_and_declines_update(self) -> None:
+    def test_cli_shows_status_and_update_check_warning(self) -> None:
+        """Проверяет статусное меню wrapper при невозможности проверить обновления.
+
+        Что делает: создаёт fake install root и fake docker, но не даёт рабочий git remote для проверки версии.
+        Ожидаемая реакция: CLI показывает путь установки, сервисы и предупреждение о невозможности auto-check без запуска update.
+        """
         temp_home = Path(tempfile.mkdtemp(prefix="kernvox-cli-home."))
         fake_install = Path(tempfile.mkdtemp(prefix="kernvox-cli-install."))
         state_dir = temp_home / ".config" / "kernvoxhub"
@@ -374,13 +475,60 @@ class KernvoxCliTestCase(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(str(fake_install), result.stdout)
-            self.assertIn("Обновление не запускалось.", result.stdout)
+            self.assertIn("Не удалось проверить обновления", result.stdout)
             self.assertFalse(marker_file.exists())
         finally:
             shutil.rmtree(temp_home, ignore_errors=True)
             shutil.rmtree(fake_install, ignore_errors=True)
 
+    def test_cli_check_update_reports_available_version(self) -> None:
+        """Проверяет явную команду `kernvoxhub check-update`.
+
+        Что делает: подменяет `git fetch/rev-list`, чтобы remote содержал две новые версии относительно local HEAD.
+        Ожидаемая реакция: wrapper сообщает пользователю, что доступна новая версия.
+        """
+        temp_home = Path(tempfile.mkdtemp(prefix="kernvox-check-update-home."))
+        fake_install = Path(tempfile.mkdtemp(prefix="kernvox-check-update-install."))
+        state_dir = temp_home / ".config" / "kernvoxhub"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install-dir").write_text(f"{fake_install}\n")
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        (fake_install / ".git").mkdir(parents=True, exist_ok=True)
+        (fake_install / "update.sh").write_text("#!/bin/bash\n")
+
+        fake_bin = fake_install / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        git_script = fake_bin / "git"
+        git_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "if [ \"$1\" = \"-C\" ]; then shift 2; fi\n"
+            "case \"$1 $2\" in\n"
+            "  'fetch --quiet') exit 0 ;;\n"
+            "  'rev-parse --abbrev-ref') printf '%s\\n' 'origin/main'; exit 0 ;;\n"
+            "  'rev-list --count') printf '%s\\n' '2'; exit 0 ;;\n"
+            "esac\n"
+            "exit 1\n"
+        )
+        git_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f'PATH="{fake_bin}:$PATH" HOME="{temp_home}" bash "{KERNVOX_CLI}" check-update'
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Доступна новая версия", result.stdout)
+        finally:
+            shutil.rmtree(temp_home, ignore_errors=True)
+            shutil.rmtree(fake_install, ignore_errors=True)
+
     def test_update_launcher_alias_runs_cli_update(self) -> None:
+        """Проверяет compatibility alias `kernvoxhub-update`.
+
+        Что делает: запускает legacy launcher и fake update script через сохранённый installation path.
+        Ожидаемая реакция: alias делегирует выполнение в `kernvoxhub update` и передаёт аргументы без потери.
+        """
         temp_home = Path(tempfile.mkdtemp(prefix="kernvox-update-alias-home."))
         fake_install = Path(tempfile.mkdtemp(prefix="kernvox-update-alias-install."))
         state_dir = temp_home / ".config" / "kernvoxhub"
@@ -407,6 +555,11 @@ class KernvoxCliTestCase(unittest.TestCase):
             shutil.rmtree(fake_install, ignore_errors=True)
 
     def test_cli_detects_installation_path_from_docker_mounts(self) -> None:
+        """Проверяет автообнаружение установки по Docker mounts.
+
+        Что делает: подменяет `docker inspect`, чтобы nginx container указывал mount на fake install root.
+        Ожидаемая реакция: wrapper находит installation root без state-файла и запускает updater именно из него.
+        """
         temp_dir = Path(tempfile.mkdtemp(prefix="kernvox-launcher-docker."))
         fake_install = temp_dir / "install"
         fake_install.mkdir(parents=True, exist_ok=True)
@@ -448,6 +601,11 @@ class KernvoxCliTestCase(unittest.TestCase):
 
 class SslSetupScriptTestCase(unittest.TestCase):
     def test_collect_ssl_configuration_fails_cleanly_on_eof_after_invalid_input(self) -> None:
+        """Проверяет корректный отказ SSL setup при EOF после невалидного ввода.
+
+        Что делает: передаёт localhost/bad-email, затем обрывает ввод до завершения повторного prompt.
+        Ожидаемая реакция: скрипт завершает работу с понятной ошибкой `Ввод прерван пользователем`, а не зависает.
+        """
         script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
         env_file = Path(tempfile.mkstemp(prefix="kernvox-ssl-env.")[1])
         env_file.write_text("DOMAIN=localhost\nEMAIL=bad-email\n")
@@ -475,6 +633,11 @@ EOF
             env_file.unlink(missing_ok=True)
 
     def test_verify_tls_deployment_rejects_missing_certificates(self) -> None:
+        """Проверяет отказ TLS verification при отсутствии сертификатов в nginx.
+
+        Что делает: подменяет `compose_run exec nginx test -f`, чтобы проверка fullchain/privkey падала.
+        Ожидаемая реакция: SSL setup завершает работу с ошибкой о недоступном certificate file.
+        """
         script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
 
         try:
@@ -498,6 +661,11 @@ EOF
             script_copy.unlink(missing_ok=True)
 
     def test_verify_tls_deployment_requires_loaded_https_config(self) -> None:
+        """Проверяет, что SSL setup требует реально загруженный HTTPS config.
+
+        Что делает: имитирует наличие сертификатов, но возвращает `nginx -T` без `listen 443 ssl`.
+        Ожидаемая реакция: verification падает, потому что nginx не применил TLS-конфигурацию.
+        """
         script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
 
         try:
@@ -525,6 +693,11 @@ EOF
             script_copy.unlink(missing_ok=True)
 
     def test_verify_tls_deployment_accepts_loaded_https_config(self) -> None:
+        """Проверяет успешную TLS verification после применения HTTPS config.
+
+        Что делает: имитирует наличие сертификатов и `nginx -T` с `listen 443 ssl` и правильным `ssl_certificate`.
+        Ожидаемая реакция: verification проходит и скрипт продолжает выполнение.
+        """
         script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
 
         try:
@@ -556,6 +729,11 @@ EOF
 
 class NginxEntrypointTestCase(unittest.TestCase):
     def test_renders_http_config_without_certificates(self) -> None:
+        """Проверяет nginx entrypoint без TLS-сертификатов.
+
+        Что делает: запускает render-only mode с пустым cert root и `DOMAIN=localhost`.
+        Ожидаемая реакция: генерируется HTTP-конфигурация на 80 порту без `listen 443 ssl`.
+        """
         temp_dir = Path(tempfile.mkdtemp(prefix="kernvox-nginx-http."))
         target_conf = temp_dir / "nginx.conf"
 
@@ -579,6 +757,11 @@ class NginxEntrypointTestCase(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_renders_https_config_when_certificates_exist(self) -> None:
+        """Проверяет nginx entrypoint при наличии TLS-сертификатов.
+
+        Что делает: создаёт fake `fullchain.pem` и `privkey.pem`, затем запускает render-only mode.
+        Ожидаемая реакция: генерируется HTTPS-конфигурация с `listen 443 ssl`, `ssl_certificate` и HTTP-to-HTTPS redirect.
+        """
         temp_dir = Path(tempfile.mkdtemp(prefix="kernvox-nginx-https."))
         cert_dir = temp_dir / "certs" / "api.example.com"
         target_conf = temp_dir / "nginx.conf"

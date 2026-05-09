@@ -4,6 +4,11 @@ from datetime import datetime, timezone
 
 class TestMetricsAPI:
     def test_metrics_history_requires_limit_and_hides_inactive_servers(self, client, db_session, auth_headers):
+        """Проверяет, что metrics history не раскрывает неактивные серверы.
+
+        Что делает: создаёт неактивный сервер с метрикой и запрашивает `/servers/{id}/metrics/history`.
+        Ожидаемая реакция: API возвращает `404`, даже если метрики в БД существуют.
+        """
         from models.metric import Metric
         from models.server import Server
 
@@ -17,6 +22,11 @@ class TestMetricsAPI:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_create_metric_uses_path_server_id(self, client, db_session, auth_headers, internal_headers):
+        """Проверяет запись метрики только для server_id из URL.
+
+        Что делает: отправляет `POST /servers/{id}/metrics` с payload метрики и внутренним ключом.
+        Ожидаемая реакция: API создаёт запись со `server_id` из path, не доверяя клиентскому телу для выбора сервера.
+        """
         from models.server import Server
 
         server = Server(name="test-server", host="192.168.1.100", username="root")
@@ -43,6 +53,11 @@ class TestMetricsAPI:
         assert response.json()["server_id"] == server.id
 
     def test_current_metrics_prefer_latest_id_when_timestamps_match(self, client, db_session, auth_headers):
+        """Проверяет выбор текущей метрики при одинаковом timestamp.
+
+        Что делает: создаёт две метрики с одним timestamp и запрашивает `limit=1`.
+        Ожидаемая реакция: endpoint возвращает запись с большим id и её значения CPU/RAM.
+        """
         from models.metric import Metric
         from models.server import Server
 
@@ -65,6 +80,11 @@ class TestMetricsAPI:
         assert response.json()[0]["ram_percent"] == 40.0
 
     def test_metrics_timeseries_returns_raw_points_in_ascending_order(self, client, db_session, auth_headers):
+        """Проверяет raw timeseries в возрастающем порядке.
+
+        Что делает: создаёт две метрики с разным временем и запрашивает `interval=raw&order=asc`.
+        Ожидаемая реакция: API возвращает две точки от старой к новой и сохраняет availability ratio каждой raw-точки.
+        """
         from models.metric import Metric
         from models.server import Server
 
@@ -110,6 +130,11 @@ class TestMetricsAPI:
         assert data["points"][1]["availability_ratio"] == 1.0
 
     def test_metrics_timeseries_aggregates_into_buckets(self, client, db_session, auth_headers):
+        """Проверяет агрегацию timeseries в временные buckets.
+
+        Что делает: создаёт две метрики в одном 5-минутном окне и запрашивает `interval=5m`.
+        Ожидаемая реакция: API возвращает одну точку со средними, min/max и availability ratio по двум samples.
+        """
         from models.metric import Metric
         from models.server import Server
 

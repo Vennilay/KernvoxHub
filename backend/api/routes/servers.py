@@ -41,6 +41,11 @@ def update_server(server_id: int, server: ServerUpdate, db: Session = Depends(ge
     for field, value in update_data.items():
         setattr(db_server, field, value)
 
+    if update_data.get("password"):
+        db_server.ssh_key = None
+    if update_data.get("ssh_key"):
+        db_server.password = None
+
     if host_changed or port_changed:
         db_server.host_key = None
 

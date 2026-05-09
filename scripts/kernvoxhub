@@ -116,11 +116,17 @@ usage() {
 KernvoxHub CLI
 
 Usage:
-  kernvoxhub              Show installation status and offer update.
+  kernvoxhub              Show installation status, check updates, and offer update.
   kernvoxhub help         Show this help.
   kernvoxhub status       Show Docker Compose service status.
-  kernvoxhub update [...] Run project update.sh with git pull/rebuild flow.
+  kernvoxhub check-update Check whether a new version is available.
+  kernvoxhub update       Install the latest available version.
   kernvoxhub logs [svc]   Show docker compose logs (-f), optionally for one service.
+  kernvoxhub add-server   Run interactive server onboarding inside backend.
+  kernvoxhub list-servers List configured servers.
+  kernvoxhub test-server <id>
+  kernvoxhub reboot-server <id> [--yes]
+  kernvoxhub metrics <id>
 EOF
 }
 
@@ -142,18 +148,8 @@ print_header() {
 
 show_status() {
     local install_root="$1"
-    local branch_name=""
-    local commit_hash=""
 
     echo "📁 Установка: ${install_root}"
-
-    if command -v git >/dev/null 2>&1 && [ -d "${install_root}/.git" ]; then
-        branch_name="$(git -C "$install_root" branch --show-current 2>/dev/null || true)"
-        commit_hash="$(git -C "$install_root" rev-parse --short HEAD 2>/dev/null || true)"
-
-        [ -n "$branch_name" ] && echo "🌿 Ветка: ${branch_name}"
-        [ -n "$commit_hash" ] && echo "🔖 Коммит: ${commit_hash}"
-    fi
 
     echo ""
     echo "📊 Сервисы:"
@@ -161,6 +157,78 @@ show_status() {
         cd "$install_root"
         compose_exec ps
     ) || echo "  Docker Compose недоступен или сервисы ещё не запускались."
+}
+
+update_upstream_ref() {
+    local install_root="$1"
+    local ref=""
+
+    ref="$(git -C "$install_root" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [ -n "$ref" ]; then
+        printf '%s' "$ref"
+        return 0
+    fi
+
+    ref="$(git -C "$install_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    if [ -n "$ref" ]; then
+        printf '%s' "$ref"
+        return 0
+    fi
+
+    if git -C "$install_root" rev-parse --verify origin/main >/dev/null 2>&1; then
+        printf '%s' "origin/main"
+        return 0
+    fi
+
+    return 1
+}
+
+check_update_state() {
+    local install_root="$1"
+    local upstream_ref=""
+    local pending_count=""
+
+    if ! command -v git >/dev/null 2>&1 || [ ! -d "${install_root}/.git" ]; then
+        printf '%s' "unknown"
+        return 0
+    fi
+
+    git -C "$install_root" fetch --quiet --prune origin >/dev/null 2>&1 || {
+        printf '%s' "unknown"
+        return 0
+    }
+
+    upstream_ref="$(update_upstream_ref "$install_root" 2>/dev/null || true)"
+    if [ -z "$upstream_ref" ]; then
+        printf '%s' "unknown"
+        return 0
+    fi
+
+    pending_count="$(git -C "$install_root" rev-list --count "HEAD..${upstream_ref}" 2>/dev/null || echo 0)"
+    if [ "$pending_count" -gt 0 ]; then
+        printf '%s' "available"
+        return 0
+    fi
+
+    printf '%s' "current"
+}
+
+print_update_status() {
+    local install_root="$1"
+    local state=""
+
+    state="$(check_update_state "$install_root")"
+    case "$state" in
+        available)
+            echo "🔔 Доступна новая версия."
+            ;;
+        current)
+            echo "✅ Установлена актуальная версия."
+            ;;
+        *)
+            echo "⚠️  Не удалось проверить обновления. Проверьте интернет или remote origin."
+            ;;
+    esac
 }
 
 run_update() {
@@ -182,26 +250,54 @@ run_logs() {
     }
 }
 
+run_backend_cli() {
+    local install_root="$1"
+    shift
+
+    cd "$install_root"
+    compose_exec exec backend python -m cli.main "$@" || {
+        echo "Не удалось выполнить backend CLI. Проверьте, что сервис backend запущен." >&2
+        exit 1
+    }
+}
+
 interactive_menu() {
     local install_root="$1"
     local answer=""
+    local update_state=""
 
     echo ""
+    update_state="$(check_update_state "$install_root")"
+    case "$update_state" in
+        available)
+            echo "🔔 Доступна новая версия."
+            ;;
+        current)
+            echo "✅ Установлена актуальная версия."
+            ;;
+        *)
+            echo "⚠️  Не удалось проверить обновления автоматически."
+            ;;
+    esac
+    echo ""
     echo "Команды:"
+    echo "  kernvoxhub check-update"
     echo "  kernvoxhub update"
     echo "  kernvoxhub status"
     echo "  kernvoxhub logs [service]"
     echo ""
 
-    read -r -p "Запустить обновление сейчас? [y/N]: " answer || answer="n"
-    case "${answer:-n}" in
-        y|Y|yes|YES)
-            run_update "$install_root"
-            ;;
-        *)
-            echo "Обновление не запускалось."
-            ;;
-    esac
+    if [ "$update_state" = "available" ]; then
+        read -r -p "Установить новую версию сейчас? [Y/n]: " answer || answer="y"
+        case "${answer:-y}" in
+            y|Y|yes|YES)
+                run_update "$install_root"
+                ;;
+            *)
+                echo "Обновление не запускалось."
+                ;;
+        esac
+    fi
 }
 
 main() {
@@ -231,6 +327,11 @@ main() {
             ;;
         status)
             show_status "$install_root"
+            echo ""
+            print_update_status "$install_root"
+            ;;
+        check-update)
+            print_update_status "$install_root"
             ;;
         update)
             shift
@@ -239,6 +340,26 @@ main() {
         logs)
             shift
             run_logs "$install_root" "$@"
+            ;;
+        add-server)
+            shift
+            run_backend_cli "$install_root" add-server "$@"
+            ;;
+        list-servers)
+            shift
+            run_backend_cli "$install_root" list-servers "$@"
+            ;;
+        test-server)
+            shift
+            run_backend_cli "$install_root" test-server "$@"
+            ;;
+        reboot-server)
+            shift
+            run_backend_cli "$install_root" reboot-server "$@"
+            ;;
+        metrics)
+            shift
+            run_backend_cli "$install_root" metrics "$@"
             ;;
         *)
             echo "Неизвестная команда: ${command}" >&2

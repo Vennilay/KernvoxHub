@@ -5,8 +5,11 @@ from pathlib import Path
 from sqlalchemy import text
 
 from models.database import SessionLocal
+from models.action_audit import ActionAudit
 from models.server import Server
 from models.metric import Metric
+from collector.ssh_client import SSHClient, HostKeyMismatchError
+from services.server_actions import ServerConnectionData, reboot_server as run_reboot_server
 from services.token_manager import generate_api_token
 
 
@@ -32,7 +35,7 @@ def generate_token():
 @cli.command()
 @click.option("--name", prompt="Имя сервера", help="Имя сервера")
 @click.option("--host", prompt="IP адрес или домен", help="IP адрес или домен")
-@click.option("--port", prompt="SSH порт", default=22, show_default=True, type=int, help="SSH порт")
+@click.option("--port", prompt="SSH порт", default=22, show_default=True, type=click.IntRange(1, 65535), help="SSH порт")
 @click.option("--username", prompt="SSH пользователь", help="SSH пользователь")
 @click.option(
     "--auth-method",
@@ -49,7 +52,13 @@ def generate_token():
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Путь к приватному SSH-ключу",
 )
-def add_server(name, host, port, username, auth_method, password, ssh_key, ssh_key_file):
+@click.option(
+    "--test-connection/--skip-test",
+    default=False,
+    show_default=True,
+    help="Проверить SSH-подключение сразу после добавления.",
+)
+def add_server(name, host, port, username, auth_method, password, ssh_key, ssh_key_file, test_connection):
     """Добавляет сервер."""
     db = SessionLocal()
     try:
@@ -66,6 +75,9 @@ def add_server(name, host, port, username, auth_method, password, ssh_key, ssh_k
         db.commit()
         db.refresh(server)
         click.echo(f"\n✅ Сервер '{name}' добавлен с ID: {server.id}\n")
+
+        if test_connection:
+            _test_server_connection(db, server)
     except Exception as e:
         db.rollback()
         click.echo(f"❌ Ошибка: {e}", err=True)
@@ -176,11 +188,72 @@ def list_servers(limit):
             return
 
         click.echo(f"\n📊 Серверы ({len(servers)}):")
-        click.echo("-" * 60)
+        click.echo("-" * 86)
+        click.echo(f"{'ID':>4}  {'Статус':<8} {'Имя':<24} {'SSH':<22} {'Auth':<8}")
+        click.echo("-" * 86)
         for server in servers:
-            status = "🟢" if server.is_active else "🔴"
-            click.echo(f"{status} ID:{server.id} | {server.name} | {server.host}:{server.port}")
+            status_text = "active" if server.is_active else "inactive"
+            auth_method = "key" if server._ssh_key_encrypted else "password" if server._password_encrypted else "none"
+            click.echo(
+                f"{server.id:>4}  {status_text:<8} "
+                f"{server.name[:24]:<24} {server.host}:{server.port:<16} {auth_method:<8}"
+            )
         click.echo()
+    finally:
+        db.close()
+
+
+@cli.command("test-server")
+@click.argument("server_id", type=int)
+def test_server(server_id):
+    """Проверяет SSH-доступ к серверу и сохраняет host key."""
+    db = SessionLocal()
+    try:
+        server = _get_cli_server(db, server_id)
+        _test_server_connection(db, server)
+    finally:
+        db.close()
+
+
+@cli.command("reboot-server")
+@click.argument("server_id", type=int)
+@click.option("--yes", is_flag=True, help="Не запрашивать подтверждение.")
+def reboot_server_command(server_id, yes):
+    """Перезагружает сервер через SSH."""
+    db = SessionLocal()
+    try:
+        server = _get_cli_server(db, server_id)
+        if not yes:
+            click.confirm(
+                f"Перезагрузить сервер '{server.name}' ({server.host}:{server.port})?",
+                abort=True,
+            )
+
+        result = run_reboot_server(_connection_data_from_server(server))
+        if server.host_key is None and result.discovered_host_key is not None:
+            server.host_key = result.discovered_host_key
+
+        audit = ActionAudit(
+            server_id=server.id,
+            action="reboot",
+            status=result.status,
+            requested_by="cli",
+            message=result.message,
+        )
+        db.add(audit)
+        db.commit()
+
+        if result.status != "accepted":
+            click.echo(f"❌ Перезагрузка не выполнена: {result.message}", err=True)
+            sys.exit(1)
+
+        click.echo(f"✅ Команда перезагрузки отправлена серверу '{server.name}'.")
+    except click.ClickException:
+        raise
+    except Exception as e:
+        db.rollback()
+        click.echo(f"❌ Ошибка: {e}", err=True)
+        sys.exit(1)
     finally:
         db.close()
 
@@ -205,6 +278,47 @@ def delete_server(server_id):
         sys.exit(1)
     finally:
         db.close()
+
+
+def _get_cli_server(db, server_id: int) -> Server:
+    server = db.query(Server).filter(Server.id == server_id, Server.is_active == True).first()
+    if not server:
+        raise click.ClickException(f"Сервер с ID {server_id} не найден или неактивен.")
+    return server
+
+
+def _connection_data_from_server(server: Server) -> ServerConnectionData:
+    return ServerConnectionData(
+        host=server.host,
+        port=server.port,
+        username=server.username,
+        password=server.password,
+        ssh_key=server.ssh_key,
+        saved_host_key=server.host_key,
+    )
+
+
+def _test_server_connection(db, server: Server) -> None:
+    click.echo(f"Проверяю SSH-доступ к {server.host}:{server.port}...")
+    ssh = SSHClient(
+        host=server.host,
+        port=server.port,
+        username=server.username,
+        password=server.password,
+        ssh_key=server.ssh_key,
+    )
+
+    try:
+        if not ssh.connect(saved_host_key=server.host_key, timeout=10):
+            raise click.ClickException("SSH-подключение не удалось.")
+        if server.host_key is None and ssh.discovered_host_key is not None:
+            server.host_key = ssh.discovered_host_key
+            db.commit()
+        click.echo("✅ SSH-подключение успешно.")
+    except HostKeyMismatchError as e:
+        raise click.ClickException(f"Проверка host key не прошла: {e}") from e
+    finally:
+        ssh.close()
 
 
 @cli.command()
