@@ -1,3 +1,4 @@
+import shlex
 from typing import Dict, Any, Optional, List
 from collector.ssh_client import SSHClient
 
@@ -139,8 +140,13 @@ class MetricsFetcher:
         )
         if exit_code == 0 and output.strip():
             interface = output.strip()
+            interface_arg = shlex.quote(interface)
             exit_code, output, _ = self.ssh.execute(
-                f"awk -F'[: ]+' '$1 ~ /^{interface}$/ {{print $3, $11}}' /proc/net/dev"
+                f"awk -F: -v iface={interface_arg} '"
+                "{ name=$1; gsub(/^[ \\t]+|[ \\t]+$/, \"\", name); "
+                "if (name == iface) { data=$2; gsub(/^[ \\t]+/, \"\", data); "
+                "split(data, fields, /[ \\t]+/); print fields[1], fields[9]; exit } }"
+                "' /proc/net/dev"
             )
             if exit_code == 0 and output.strip():
                 parts = output.split()
@@ -154,7 +160,10 @@ class MetricsFetcher:
                         pass
 
         exit_code, output, _ = self.ssh.execute(
-            "awk -F'[: ]+' '$1 !~ /^(lo|)$/ {rx += $3; tx += $11} END {print rx+0, tx+0}' /proc/net/dev"
+            "awk -F: '{ name=$1; gsub(/^[ \\t]+|[ \\t]+$/, \"\", name); "
+            "if (name != \"lo\" && name != \"\") { data=$2; gsub(/^[ \\t]+/, \"\", data); "
+            "split(data, fields, /[ \\t]+/); rx += fields[1]; tx += fields[9] } } "
+            "END {print rx+0, tx+0}' /proc/net/dev"
         )
         if exit_code == 0 and output.strip():
             parts = output.split()

@@ -142,23 +142,28 @@ Android endpoints:
 
 ## Обновление
 
-После установки можно обновляться из любого каталога:
+После установки `kernvoxhub` сам проверяет наличие новой версии и предлагает обновиться:
 
 ```bash
-kernvoxhub update
+kernvoxhub
 ```
 
-Дополнительные варианты:
+Можно проверить и запустить обновление явно:
 
 ```bash
+kernvoxhub check-update
+kernvoxhub update
 kernvoxhub status
 kernvoxhub logs backend
-kernvoxhub update --ref main
-kernvoxhub update --skip-git
-kernvoxhub update --with-ssl
 ```
 
-`update.sh` проверяет существующую инсталляцию, подтягивает код через `git pull --ff-only`, пересобирает контейнеры и ждёт health checks. Если в старом `.env` нет новых runtime-секретов, например `SERVER_ACTION_TOKEN`, updater добавит их сам.
+Обычный сценарий не требует выбирать ветки или коммиты. Updater проверяет опубликованную версию, обновляет файлы проекта, пересобирает контейнеры и ждёт health checks. Если в старом `.env` нет новых runtime-секретов, например `SERVER_ACTION_TOKEN`, updater добавит их сам.
+
+Для обслуживания без скачивания новой версии есть технический режим:
+
+```bash
+kernvoxhub update --skip-git
+```
 
 ## Конфигурация
 

@@ -5,7 +5,6 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 INSTALL_DIR_OVERRIDE=""
-UPDATE_REF=""
 SKIP_GIT_UPDATE="n"
 RUN_SSL_UPDATE="n"
 cd "$ROOT_DIR"
@@ -22,8 +21,7 @@ Usage: ./update.sh [options]
 
 Options:
   --install-dir <path> Use an installed KernvoxHub directory from any current path.
-  --ref <git-ref>   Switch to a branch/tag/commit before restart.
-  --skip-git        Do not run git fetch/pull; only rebuild and restart services.
+  --skip-git        Do not download updates; only rebuild and restart services.
   --with-ssl        Run scripts/ssl-setup.sh after update.
   --help            Show this help.
 EOF
@@ -59,11 +57,6 @@ parse_args() {
             --install-dir)
                 [ "$#" -ge 2 ] || die "Флаг --install-dir требует путь к каталогу инсталляции."
                 INSTALL_DIR_OVERRIDE="$2"
-                shift 2
-                ;;
-            --ref)
-                [ "$#" -ge 2 ] || die "Флаг --ref требует значение."
-                UPDATE_REF="$2"
                 shift 2
                 ;;
             --skip-git)
@@ -104,42 +97,60 @@ ensure_existing_installation() {
 }
 
 ensure_clean_git_worktree() {
-    git diff --quiet --ignore-submodules -- || die "Рабочее дерево Git содержит незакоммиченные изменения. Зафиксируйте или уберите их перед обновлением."
-    git diff --cached --quiet --ignore-submodules -- || die "В индексе Git есть незакоммиченные изменения. Зафиксируйте или уберите их перед обновлением."
+    git diff --quiet --ignore-submodules -- || die "В файлах проекта есть локальные изменения. Сохраните их перед обновлением."
+    git diff --cached --quiet --ignore-submodules -- || die "Есть подготовленные локальные изменения. Сохраните их перед обновлением."
 }
 
-checkout_update_ref() {
-    [ -n "$UPDATE_REF" ] || return 0
-    info "Переключаю репозиторий на ${UPDATE_REF}..."
-    git checkout "$UPDATE_REF"
+default_update_ref() {
+    local ref=""
+
+    ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    if [ -n "$ref" ]; then
+        printf '%s' "$ref"
+        return 0
+    fi
+
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        printf '%s' "origin/main"
+        return 0
+    fi
+
+    return 1
 }
 
 update_source_code() {
+    local update_ref=""
+
     [ "$SKIP_GIT_UPDATE" = "y" ] && return 0
 
     command_exists git || die "Git не найден. Установите Git или используйте ./update.sh --skip-git."
     ensure_clean_git_worktree
 
-    info "Получаю последние изменения из origin..."
+    info "Проверяю наличие новой версии..."
     git fetch --tags --prune origin
-    checkout_update_ref
 
-    if [ -n "$UPDATE_REF" ]; then
-        if git symbolic-ref --quiet HEAD >/dev/null 2>&1; then
-            info "Подтягиваю обновления для ветки $(git branch --show-current)..."
-            git pull --ff-only origin "$(git branch --show-current)"
+    if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        if [ "$(git rev-list --count HEAD..'@{u}' 2>/dev/null || echo 0)" = "0" ]; then
+            success "Установлена актуальная версия."
         else
-            info "Репозиторий переведен на detached HEAD ${UPDATE_REF}; пропускаю git pull."
+            info "Устанавливаю новую версию..."
         fi
+        git pull --ff-only
         return 0
     fi
 
-    if git symbolic-ref --quiet HEAD >/dev/null 2>&1; then
-        info "Подтягиваю обновления для текущей ветки $(git branch --show-current)..."
-        git pull --ff-only
-    else
-        warn "Репозиторий находится в detached HEAD; git pull пропущен. Используйте --ref <branch> для переключения на ветку."
+    update_ref="$(default_update_ref)" || die "Не удалось определить источник обновлений. Проверьте remote origin."
+    if git merge-base --is-ancestor HEAD "$update_ref"; then
+        if [ "$(git rev-list --count HEAD.."$update_ref" 2>/dev/null || echo 0)" = "0" ]; then
+            success "Установлена актуальная версия."
+        else
+            info "Устанавливаю новую версию..."
+        fi
+        git merge --ff-only "$update_ref"
+        return 0
     fi
+
+    die "Автоматическое обновление невозможно: локальная версия отличается от опубликованной. Обновите установку вручную или восстановите официальный релиз."
 }
 
 restart_stack() {
@@ -219,11 +230,11 @@ main() {
     echo "Основная команда управления:"
     echo "  ${KERNVOX_MAIN_COMMAND_NAME}"
     echo ""
+    echo "Проверить новую версию:"
+    echo "  ${KERNVOX_MAIN_COMMAND_NAME} check-update"
+    echo ""
     echo "Следующее обновление:"
     echo "  ${KERNVOX_MAIN_COMMAND_NAME} update"
-    echo ""
-    echo "Текущий коммит:"
-    echo "  $(git rev-parse --short HEAD 2>/dev/null || echo 'неизвестно')"
     echo ""
     echo "Для просмотра логов:"
     echo "  ${compose_cmd_string}logs -f"

@@ -192,7 +192,7 @@ EOF
 
 
 class UpdateScriptTestCase(unittest.TestCase):
-    def test_parse_args_supports_ref_skip_git_and_ssl(self) -> None:
+    def test_parse_args_supports_skip_git_and_ssl(self) -> None:
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
 
         try:
@@ -200,12 +200,12 @@ class UpdateScriptTestCase(unittest.TestCase):
                 f"""
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
-                parse_args --ref main --skip-git --with-ssl
-                printf '%s|%s|%s\\n' "$UPDATE_REF" "$SKIP_GIT_UPDATE" "$RUN_SSL_UPDATE"
+                parse_args --skip-git --with-ssl
+                printf '%s|%s\\n' "$SKIP_GIT_UPDATE" "$RUN_SSL_UPDATE"
                 """
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "main|y|y")
+            self.assertEqual(result.stdout.strip(), "y|y")
         finally:
             script_copy.unlink(missing_ok=True)
 
@@ -303,7 +303,7 @@ class UpdateScriptTestCase(unittest.TestCase):
                 """
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Рабочее дерево Git содержит незакоммиченные изменения", result.stderr)
+            self.assertIn("В файлах проекта есть локальные изменения", result.stderr)
         finally:
             script_copy.unlink(missing_ok=True)
 
@@ -335,6 +335,7 @@ class KernvoxCliTestCase(unittest.TestCase):
         result = run_shell(f'bash "{KERNVOX_CLI}" help')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("KernvoxHub CLI", result.stdout)
+        self.assertIn("kernvoxhub check-update", result.stdout)
         self.assertIn("kernvoxhub update", result.stdout)
 
     def test_cli_update_uses_saved_installation_path(self) -> None:
@@ -363,7 +364,7 @@ class KernvoxCliTestCase(unittest.TestCase):
             shutil.rmtree(temp_home, ignore_errors=True)
             shutil.rmtree(fake_install, ignore_errors=True)
 
-    def test_cli_shows_status_and_declines_update(self) -> None:
+    def test_cli_shows_status_and_update_check_warning(self) -> None:
         temp_home = Path(tempfile.mkdtemp(prefix="kernvox-cli-home."))
         fake_install = Path(tempfile.mkdtemp(prefix="kernvox-cli-install."))
         state_dir = temp_home / ".config" / "kernvoxhub"
@@ -404,8 +405,45 @@ class KernvoxCliTestCase(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(str(fake_install), result.stdout)
-            self.assertIn("Обновление не запускалось.", result.stdout)
+            self.assertIn("Не удалось проверить обновления", result.stdout)
             self.assertFalse(marker_file.exists())
+        finally:
+            shutil.rmtree(temp_home, ignore_errors=True)
+            shutil.rmtree(fake_install, ignore_errors=True)
+
+    def test_cli_check_update_reports_available_version(self) -> None:
+        temp_home = Path(tempfile.mkdtemp(prefix="kernvox-check-update-home."))
+        fake_install = Path(tempfile.mkdtemp(prefix="kernvox-check-update-install."))
+        state_dir = temp_home / ".config" / "kernvoxhub"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install-dir").write_text(f"{fake_install}\n")
+        (fake_install / "docker-compose.yml").write_text("services:\n")
+        (fake_install / "scripts").mkdir(parents=True, exist_ok=True)
+        (fake_install / ".git").mkdir(parents=True, exist_ok=True)
+        (fake_install / "update.sh").write_text("#!/bin/bash\n")
+
+        fake_bin = fake_install / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        git_script = fake_bin / "git"
+        git_script.write_text(
+            "#!/bin/bash\n"
+            "set -eu\n"
+            "if [ \"$1\" = \"-C\" ]; then shift 2; fi\n"
+            "case \"$1 $2\" in\n"
+            "  'fetch --quiet') exit 0 ;;\n"
+            "  'rev-parse --abbrev-ref') printf '%s\\n' 'origin/main'; exit 0 ;;\n"
+            "  'rev-list --count') printf '%s\\n' '2'; exit 0 ;;\n"
+            "esac\n"
+            "exit 1\n"
+        )
+        git_script.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f'PATH="{fake_bin}:$PATH" HOME="{temp_home}" bash "{KERNVOX_CLI}" check-update'
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Доступна новая версия", result.stdout)
         finally:
             shutil.rmtree(temp_home, ignore_errors=True)
             shutil.rmtree(fake_install, ignore_errors=True)

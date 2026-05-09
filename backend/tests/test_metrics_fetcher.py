@@ -9,6 +9,24 @@ class FakeSSHClient:
         return self.responses.get(command, (-1, "", "unknown command"))
 
 
+class NetworkSSHClient:
+    def execute(self, command: str, timeout: int = 10):
+        if command.startswith("ip route show default"):
+            return 0, "eth0\n", ""
+        if "-v iface=eth0" in command:
+            return 0, "61625988655 52465603776\n", ""
+        return -1, "", "unknown command"
+
+
+class FallbackNetworkSSHClient:
+    def execute(self, command: str, timeout: int = 10):
+        if command.startswith("ip route show default"):
+            return 1, "", ""
+        if "END {print rx+0, tx+0}" in command:
+            return 0, "61625988655 52465603776\n", ""
+        return -1, "", "unknown command"
+
+
 def test_ram_metrics_match_linux_working_set():
     command = "cat /proc/meminfo"
     ssh = FakeSSHClient(
@@ -90,3 +108,21 @@ def test_cpu_percent_falls_back_to_vmstat():
     fetcher = MetricsFetcher(ssh)
 
     assert fetcher._get_cpu_percent() == 88.0
+
+
+def test_network_metrics_parse_default_interface_with_leading_spaces():
+    fetcher = MetricsFetcher(NetworkSSHClient())
+
+    assert fetcher._get_network_metrics() == {
+        "network_rx_bytes": 61625988655.0,
+        "network_tx_bytes": 52465603776.0,
+    }
+
+
+def test_network_metrics_fallback_sums_non_loopback_interfaces():
+    fetcher = MetricsFetcher(FallbackNetworkSSHClient())
+
+    assert fetcher._get_network_metrics() == {
+        "network_rx_bytes": 61625988655.0,
+        "network_tx_bytes": 52465603776.0,
+    }
