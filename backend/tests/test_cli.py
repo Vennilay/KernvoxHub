@@ -5,7 +5,9 @@ from sqlalchemy.pool import StaticPool
 
 import cli.main as cli_main
 from models.database import Base
+from models.action_audit import ActionAudit
 from models.server import Server
+from services.server_actions import ServerActionResult
 
 
 def test_normalize_ssh_key_text_strips_terminal_artifacts():
@@ -86,5 +88,52 @@ def test_add_server_interactive_supports_pasted_ssh_key(monkeypatch):
         assert server.port == 49152
         assert server.password is None
         assert server.ssh_key == key_value
+    finally:
+        db.close()
+
+
+def test_reboot_server_command_records_audit(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(cli_main, "SessionLocal", testing_session)
+    monkeypatch.setattr(
+        cli_main,
+        "run_reboot_server",
+        lambda _connection: ServerActionResult(
+            status="accepted",
+            message="Reboot command accepted by server",
+            discovered_host_key="ssh-ed25519 AAAAdiscovered",
+        ),
+    )
+
+    db = testing_session()
+    try:
+        server = Server(name="Moscow", host="31.56.211.178", port=2222, username="zeno")
+        server.ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key\n-----END OPENSSH PRIVATE KEY-----\n"
+        db.add(server)
+        db.commit()
+        server_id = server.id
+    finally:
+        db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main.cli, ["reboot-server", str(server_id), "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "Команда перезагрузки отправлена" in result.output
+
+    db = testing_session()
+    try:
+        server = db.query(Server).one()
+        audit = db.query(ActionAudit).one()
+        assert server.host_key == "ssh-ed25519 AAAAdiscovered"
+        assert audit.action == "reboot"
+        assert audit.status == "accepted"
+        assert audit.requested_by == "cli"
     finally:
         db.close()

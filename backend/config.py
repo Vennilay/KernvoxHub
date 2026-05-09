@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     API_SECRET: str
     API_TOKEN: str = ""
+    SERVER_ACTION_TOKEN: str = ""
     ENCRYPTION_KEY: str
     INTERNAL_API_KEY: str = ""
     CORS_ORIGINS: str = "http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000"

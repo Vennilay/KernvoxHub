@@ -178,7 +178,6 @@ class TestServerAPIEncryption:
                 "host": "10.0.0.1",
                 "username": "admin",
                 "password": "secret123",
-                "ssh_key": "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
             },
             headers=auth_headers,
         )

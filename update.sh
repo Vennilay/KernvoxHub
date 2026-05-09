@@ -40,6 +40,19 @@ print_runtime_info() {
     info "Docker Compose: $(compose_run version --short 2>/dev/null || compose_run version | head -n 1)"
 }
 
+generate_hex_secret() {
+    openssl rand -hex 32
+}
+
+ensure_runtime_env_defaults() {
+    if [ -z "${SERVER_ACTION_TOKEN:-}" ]; then
+        SERVER_ACTION_TOKEN="$(generate_hex_secret)"
+        export SERVER_ACTION_TOKEN
+        upsert_env_value "$ENV_FILE" "SERVER_ACTION_TOKEN" "$SERVER_ACTION_TOKEN"
+        success "Добавлен SERVER_ACTION_TOKEN для защищённых серверных действий."
+    fi
+}
+
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -180,6 +193,7 @@ main() {
     load_existing_env
     ensure_existing_installation
     ensure_existing_installation_secrets
+    ensure_runtime_env_defaults
     update_source_code
     echo ""
     restart_stack

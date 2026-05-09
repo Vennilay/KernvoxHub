@@ -121,6 +121,11 @@ Usage:
   kernvoxhub status       Show Docker Compose service status.
   kernvoxhub update [...] Run project update.sh with git pull/rebuild flow.
   kernvoxhub logs [svc]   Show docker compose logs (-f), optionally for one service.
+  kernvoxhub add-server   Run interactive server onboarding inside backend.
+  kernvoxhub list-servers List configured servers.
+  kernvoxhub test-server <id>
+  kernvoxhub reboot-server <id> [--yes]
+  kernvoxhub metrics <id>
 EOF
 }
 
@@ -182,6 +187,17 @@ run_logs() {
     }
 }
 
+run_backend_cli() {
+    local install_root="$1"
+    shift
+
+    cd "$install_root"
+    compose_exec exec backend python -m cli.main "$@" || {
+        echo "Не удалось выполнить backend CLI. Проверьте, что сервис backend запущен." >&2
+        exit 1
+    }
+}
+
 interactive_menu() {
     local install_root="$1"
     local answer=""
@@ -239,6 +255,26 @@ main() {
         logs)
             shift
             run_logs "$install_root" "$@"
+            ;;
+        add-server)
+            shift
+            run_backend_cli "$install_root" add-server "$@"
+            ;;
+        list-servers)
+            shift
+            run_backend_cli "$install_root" list-servers "$@"
+            ;;
+        test-server)
+            shift
+            run_backend_cli "$install_root" test-server "$@"
+            ;;
+        reboot-server)
+            shift
+            run_backend_cli "$install_root" reboot-server "$@"
+            ;;
+        metrics)
+            shift
+            run_backend_cli "$install_root" metrics "$@"
             ;;
         *)
             echo "Неизвестная команда: ${command}" >&2

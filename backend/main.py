@@ -5,7 +5,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from api.middleware.auth import api_key_middleware
-from api.routes import servers_router, metrics_router, android_router
+from api.routes import servers_router, metrics_router, android_router, actions_router
 from models.database import Base, engine, ensure_metrics_hypertable, ensure_runtime_schema
 from config import settings
 
@@ -40,6 +40,7 @@ app.add_middleware(
 app.middleware("http")(api_key_middleware)
 
 app.include_router(servers_router)
+app.include_router(actions_router)
 app.include_router(metrics_router)
 app.include_router(android_router)
 

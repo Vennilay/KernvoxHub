@@ -255,6 +255,36 @@ class UpdateScriptTestCase(unittest.TestCase):
             script_copy.unlink(missing_ok=True)
             env_file.unlink(missing_ok=True)
 
+    def test_update_adds_missing_server_action_token(self) -> None:
+        script_copy = make_script_copy(REPO_ROOT / "update.sh")
+        env_file = Path(tempfile.mkstemp(prefix="kernvox-update-env.")[1])
+        env_file.write_text(
+            "POSTGRES_PASSWORD=db-secret\n"
+            "API_SECRET=api-secret\n"
+            "API_TOKEN=kvx-bootstrap-token\n"
+            "ENCRYPTION_KEY=encryption-secret\n"
+            "REDIS_PASSWORD=redis-secret\n"
+            "INTERNAL_API_KEY=internal-secret\n"
+        )
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ENV_FILE="{env_file}"
+                load_existing_env
+                unset SERVER_ACTION_TOKEN
+                generate_hex_secret() {{ printf '%s' action-secret; }}
+                ensure_runtime_env_defaults
+                grep -Fx SERVER_ACTION_TOKEN=action-secret "{env_file}"
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        finally:
+            script_copy.unlink(missing_ok=True)
+            env_file.unlink(missing_ok=True)
+
     def test_update_rejects_dirty_git_worktree(self) -> None:
         script_copy = make_script_copy(REPO_ROOT / "update.sh")
 

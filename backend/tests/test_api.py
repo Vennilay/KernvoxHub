@@ -13,7 +13,8 @@ class TestServersAPI:
             "name": "test-server",
             "host": "192.168.1.100",
             "port": 22,
-            "username": "root"
+            "username": "root",
+            "password": "secret123",
         }
         response = client.post("/api/v1/servers", json=server_data, headers=auth_headers)
         assert response.status_code == status.HTTP_201_CREATED
@@ -22,6 +23,34 @@ class TestServersAPI:
         assert data["host"] == server_data["host"]
         assert "id" in data
         assert data["is_active"] is True
+
+    def test_create_server_requires_credentials(self, client, auth_headers):
+        response = client.post(
+            "/api/v1/servers",
+            json={
+                "name": "test-server",
+                "host": "192.168.1.100",
+                "port": 22,
+                "username": "root",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    def test_create_server_rejects_multiple_credentials(self, client, auth_headers):
+        response = client.post(
+            "/api/v1/servers",
+            json={
+                "name": "test-server",
+                "host": "192.168.1.100",
+                "port": 22,
+                "username": "root",
+                "password": "secret123",
+                "ssh_key": "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     def test_get_server(self, client, db_session, auth_headers):
         from models.server import Server
