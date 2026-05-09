@@ -10,6 +10,11 @@ from collector.ssh_client import HostKeyMismatchError
 
 class TestHostKeyMismatchError:
     def test_message_contains_host_and_port(self):
+        """Проверяет информативность ошибки SSH host key mismatch.
+
+        Что делает: создаёт `HostKeyMismatchError` с host/port и разными ключами.
+        Ожидаемая реакция: текст ошибки содержит endpoint и MITM-предупреждение для логов и диагностики.
+        """
         exc = HostKeyMismatchError(
             host="192.168.1.100",
             port=22,
@@ -20,7 +25,11 @@ class TestHostKeyMismatchError:
         assert "MITM" in str(exc)
 
     def test_fingerprint_truncation(self):
-        """Проверяет сокращение fingerprint."""
+        """Проверяет безопасное сокращение fingerprint в сообщениях.
+
+        Что делает: вызывает `_fingerprint` для короткого и длинного host key.
+        Ожидаемая реакция: короткий ключ не меняется, длинный обрезается с `...`, чтобы логи не раздувались полным ключом.
+        """
         short = HostKeyMismatchError._fingerprint("ssh-rsa abc")
         assert "..." not in short
 
@@ -28,6 +37,11 @@ class TestHostKeyMismatchError:
         assert "..." in long
 
     def test_fingerprint_empty(self):
+        """Проверяет fingerprint для пустого host key.
+
+        Что делает: вызывает `_fingerprint` с пустой строкой и `None`.
+        Ожидаемая реакция: функция возвращает `<none>`, не падая при неполных данных ошибки.
+        """
         assert HostKeyMismatchError._fingerprint("") == "<none>"
         assert HostKeyMismatchError._fingerprint(None) == "<none>"
 
@@ -36,7 +50,11 @@ class TestHostKeyEncryption:
     """Проверяет работу host_key в модели."""
 
     def test_host_key_encrypted_in_model(self, db_session):
-        """Проверяет шифрование host_key в БД."""
+        """Проверяет шифрование SSH host key в модели Server.
+
+        Что делает: присваивает `server.host_key` и читает сырой столбец `host_key` из БД.
+        Ожидаемая реакция: БД содержит Fernet-token, а не открытый host key.
+        """
         from models.server import Server
 
         server = Server(
@@ -56,7 +74,11 @@ class TestHostKeyEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_host_key_decrypted_on_read(self, db_session):
-        """Проверяет чтение host_key через property."""
+        """Проверяет прозрачное чтение SSH host key.
+
+        Что делает: сохраняет host key через property, refresh-ит модель и читает `server.host_key`.
+        Ожидаемая реакция: property возвращает исходный host key для последующей проверки SSH-соединения.
+        """
         from models.server import Server
 
         original_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG_test_key"
@@ -73,7 +95,11 @@ class TestHostKeyEncryption:
         assert server.host_key == original_key
 
     def test_host_key_none(self, db_session):
-        """Проверяет обработку None."""
+        """Проверяет отсутствие host key у нового сервера.
+
+        Что делает: создаёт Server без сохранённого host key.
+        Ожидаемая реакция: `server.host_key` равен `None`, что означает режим первого доверенного обнаружения ключа.
+        """
         from models.server import Server
 
         server = Server(
@@ -88,7 +114,11 @@ class TestHostKeyEncryption:
         assert server.host_key is None
 
     def test_host_key_mismatch_detection(self):
-        """Проверяет обработку несовпадения ключа."""
+        """Проверяет модель обнаружения несовпадения host key.
+
+        Что делает: сравнивает расшифрованный сохранённый ключ с отличающимся ключом и создаёт `HostKeyMismatchError`.
+        Ожидаемая реакция: ошибка содержит endpoint и MITM-предупреждение, подтверждая критичность расхождения.
+        """
         saved_key = encrypt_value("ssh-rsa AAAA_original_key")
         got_key = "ssh-rsa AAAA_fake_key_from_server"
 
@@ -105,7 +135,11 @@ class TestHostKeyEncryption:
         assert "MITM" in str(exc_info.value)
 
     def test_host_key_match_simulation(self):
-        """Проверяет совпадение ключа."""
+        """Проверяет позитивный сценарий совпадения host key.
+
+        Что делает: шифрует исходный host key, расшифровывает его и сравнивает с ключом от сервера.
+        Ожидаемая реакция: значения совпадают, что соответствует безопасному повторному SSH-подключению.
+        """
         original = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG_match_key"
         saved_key = encrypt_value(original)
         got_key = original

@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 
 class TestAndroidDashboard:
     def test_dashboard_empty(self, client, auth_headers):
+        """Проверяет Android dashboard на пустой базе.
+
+        Что делает: вызывает `GET /api/v1/android/dashboard`, когда активных серверов и метрик нет.
+        Ожидаемая реакция: API возвращает нулевые счётчики и пустой список серверов, без `null` вместо коллекции.
+        """
         response = client.get("/api/v1/android/dashboard", headers=auth_headers)
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -14,6 +19,11 @@ class TestAndroidDashboard:
         assert data["servers"] == []
 
     def test_dashboard_with_servers(self, client, db_session, auth_headers):
+        """Проверяет Android dashboard с несколькими серверами.
+
+        Что делает: создаёт два активных сервера и одну последнюю метрику, затем запрашивает dashboard.
+        Ожидаемая реакция: API возвращает оба сервера, корректный total/active count и доступность на основе последней метрики.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -40,6 +50,11 @@ class TestAndroidDashboard:
         assert len(data["servers"]) == 2
 
     def test_dashboard_uses_latest_metric_when_timestamps_match(self, client, db_session, auth_headers):
+        """Проверяет выбор последней метрики при одинаковом timestamp.
+
+        Что делает: создаёт две метрики одного сервера с одинаковым временем, но разными id и значениями.
+        Ожидаемая реакция: dashboard берёт запись с большим id, чтобы UI не показывал устаревший срез при совпавших timestamp.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -78,6 +93,11 @@ class TestAndroidDashboard:
 
 class TestAndroidServerDetails:
     def test_server_details(self, client, db_session, auth_headers):
+        """Проверяет Android details endpoint для сервера с метрикой.
+
+        Что делает: создаёт сервер и метрику с CPU/RAM/disk/uptime/network, затем вызывает details endpoint.
+        Ожидаемая реакция: API возвращает `200 OK`, данные сервера, последние значения метрик и отформатированный uptime.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -109,10 +129,20 @@ class TestAndroidServerDetails:
         assert data["uptime_formatted"] is not None
 
     def test_server_details_not_found(self, client, auth_headers):
+        """Проверяет details endpoint для несуществующего сервера.
+
+        Что делает: вызывает `/android/servers/999/details` без записи в БД.
+        Ожидаемая реакция: API возвращает `404 Not Found`, чтобы Android-клиент не получил фиктивную карточку.
+        """
         response = client.get("/api/v1/android/servers/999/details", headers=auth_headers)
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_server_details_hidden_for_inactive_server(self, client, db_session, auth_headers):
+        """Проверяет скрытие неактивных серверов в Android details.
+
+        Что делает: создаёт сервер с `is_active=False` и запрашивает его details endpoint.
+        Ожидаемая реакция: API возвращает `404`, потому что деактивированные серверы не должны отображаться клиенту.
+        """
         from models.server import Server
 
         server = Server(name="test-server", host="192.168.1.1", username="root", is_active=False)
@@ -123,6 +153,11 @@ class TestAndroidServerDetails:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_server_details_use_latest_metric_when_timestamps_match(self, client, db_session, auth_headers):
+        """Проверяет details endpoint при одинаковых timestamp у метрик.
+
+        Что делает: создаёт две метрики с одинаковым временем и разными значениями CPU/RAM.
+        Ожидаемая реакция: details endpoint возвращает значения из записи с большим id, как самую свежую.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -166,6 +201,11 @@ class TestAndroidServerDetails:
 
 class TestAndroidMetricsHistory:
     def test_metrics_history(self, client, db_session, auth_headers):
+        """Проверяет Android history endpoint для метрик.
+
+        Что делает: создаёт сервер и одну метрику, затем вызывает `/android/servers/{id}/metrics/history`.
+        Ожидаемая реакция: API возвращает `200 OK`, server_id, count=1 и массив из одной метрики.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -190,6 +230,11 @@ class TestAndroidMetricsHistory:
         assert len(data["metrics"]) == 1
 
     def test_metrics_history_limit(self, client, db_session, auth_headers):
+        """Проверяет ограничение `limit` в Android history endpoint.
+
+        Что делает: создаёт две метрики и запрашивает history с `limit=1`.
+        Ожидаемая реакция: API возвращает только одну запись и `count=1`, чтобы клиент мог безопасно пагинировать историю.
+        """
         from models.server import Server
         from models.metric import Metric
 
@@ -213,6 +258,11 @@ class TestAndroidMetricsHistory:
         assert response.json()["count"] == 1
 
     def test_metrics_timeseries(self, client, db_session, auth_headers):
+        """Проверяет Android timeseries endpoint с агрегацией.
+
+        Что делает: создаёт две метрики и запрашивает `interval=1h`.
+        Ожидаемая реакция: API возвращает одну агрегированную точку с `sample_count=2` и правильным server_id/interval.
+        """
         from models.server import Server
         from models.metric import Metric
 

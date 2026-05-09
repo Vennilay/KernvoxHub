@@ -28,6 +28,11 @@ class FallbackNetworkSSHClient:
 
 
 def test_ram_metrics_match_linux_working_set():
+    """Проверяет расчёт RAM как Linux working set.
+
+    Что делает: отдаёт fake `/proc/meminfo` с MemFree/Buffers/Cached/SReclaimable/Shmem.
+    Ожидаемая реакция: fetcher считает used/total/percent так же, как ожидается для htop/free-подобной логики.
+    """
     command = "cat /proc/meminfo"
     ssh = FakeSSHClient(
         {
@@ -59,6 +64,11 @@ def test_ram_metrics_match_linux_working_set():
 
 
 def test_ram_metrics_fall_back_to_memavailable_when_cache_fields_are_missing():
+    """Проверяет fallback RAM-расчёта через MemAvailable.
+
+    Что делает: отдаёт сокращённый `/proc/meminfo`, где нет cache breakdown полей.
+    Ожидаемая реакция: fetcher использует `MemTotal - MemAvailable` и возвращает корректные MB/percent.
+    """
     command = "cat /proc/meminfo"
     ssh = FakeSSHClient(
         {
@@ -85,6 +95,11 @@ def test_ram_metrics_fall_back_to_memavailable_when_cache_fields_are_missing():
 
 
 def test_cpu_percent_uses_proc_stat_delta():
+    """Проверяет основной расчёт CPU по `/proc/stat` delta.
+
+    Что делает: fake SSH возвращает успешный результат команды `CPU_PROC_STAT_COMMAND`.
+    Ожидаемая реакция: fetcher возвращает float-значение из proc-stat ветки без fallback на vmstat.
+    """
     command = MetricsFetcher.CPU_PROC_STAT_COMMAND
     ssh = FakeSSHClient(
         {
@@ -98,6 +113,11 @@ def test_cpu_percent_uses_proc_stat_delta():
 
 
 def test_cpu_percent_falls_back_to_vmstat():
+    """Проверяет fallback CPU-расчёта через vmstat.
+
+    Что делает: имитирует отказ proc-stat команды и успешный вывод idle percent из `vmstat`.
+    Ожидаемая реакция: fetcher возвращает `100 - idle`, сохраняя метрики на системах без доступного proc-stat сценария.
+    """
     ssh = FakeSSHClient(
         {
             MetricsFetcher.CPU_PROC_STAT_COMMAND: (-1, "", "proc stat failed"),
@@ -111,6 +131,11 @@ def test_cpu_percent_falls_back_to_vmstat():
 
 
 def test_network_metrics_parse_default_interface_with_leading_spaces():
+    """Проверяет парсинг network-счётчиков default interface.
+
+    Что делает: имитирует default route `eth0` и вывод awk по `/proc/net/dev` со значениями RX/TX.
+    Ожидаемая реакция: fetcher возвращает ненулевые `network_rx_bytes` и `network_tx_bytes`, не ломаясь на ведущих пробелах.
+    """
     fetcher = MetricsFetcher(NetworkSSHClient())
 
     assert fetcher._get_network_metrics() == {
@@ -120,6 +145,11 @@ def test_network_metrics_parse_default_interface_with_leading_spaces():
 
 
 def test_network_metrics_fallback_sums_non_loopback_interfaces():
+    """Проверяет fallback network-метрик без default route.
+
+    Что делает: имитирует отсутствие default interface и успешную сумму всех non-loopback интерфейсов.
+    Ожидаемая реакция: fetcher возвращает суммарные RX/TX вместо `0/0`.
+    """
     fetcher = MetricsFetcher(FallbackNetworkSSHClient())
 
     assert fetcher._get_network_metrics() == {

@@ -11,6 +11,11 @@ from services.server_actions import ServerActionResult
 
 
 def test_normalize_ssh_key_text_strips_terminal_artifacts():
+    """Проверяет нормализацию вставленного SSH-ключа в CLI.
+
+    Что делает: передаёт строки с bracketed paste escape-последовательностями и мусорным surrogate-символом.
+    Ожидаемая реакция: функция возвращает чистый OpenSSH private key с корректными BEGIN/END строками.
+    """
     result = cli_main._normalize_ssh_key_text(
         [
             "\x1b[200~",
@@ -26,6 +31,11 @@ def test_normalize_ssh_key_text_strips_terminal_artifacts():
 
 
 def test_add_server_interactive_supports_custom_port_and_ssh_key(tmp_path, monkeypatch):
+    """Проверяет интерактивное добавление сервера с ключом из файла.
+
+    Что делает: запускает CLI `add-server`, вводит custom SSH port, пользователя и путь к key-файлу.
+    Ожидаемая реакция: команда завершается успешно, сохраняет порт, ключ и не записывает password.
+    """
     key_path = tmp_path / "id_ed25519"
     key_value = "-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key\n-----END OPENSSH PRIVATE KEY-----\n"
     key_path.write_text(key_value, encoding="utf-8")
@@ -61,6 +71,11 @@ def test_add_server_interactive_supports_custom_port_and_ssh_key(tmp_path, monke
 
 
 def test_add_server_interactive_supports_pasted_ssh_key(monkeypatch):
+    """Проверяет интерактивное добавление сервера со вставленным ключом.
+
+    Что делает: запускает CLI `add-server`, выбирает key-auth и вставляет приватный ключ многострочным вводом.
+    Ожидаемая реакция: CLI сохраняет нормализованный ключ, custom port и оставляет password пустым.
+    """
     key_value = "-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key\n-----END OPENSSH PRIVATE KEY-----\n"
 
     engine = create_engine(
@@ -93,6 +108,11 @@ def test_add_server_interactive_supports_pasted_ssh_key(monkeypatch):
 
 
 def test_reboot_server_command_records_audit(monkeypatch):
+    """Проверяет CLI-команду reboot без реальной перезагрузки.
+
+    Что делает: подменяет reboot service успешным результатом и запускает `reboot-server <id> --yes`.
+    Ожидаемая реакция: CLI пишет audit-запись, сохраняет discovered host key и сообщает об отправленной команде.
+    """
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

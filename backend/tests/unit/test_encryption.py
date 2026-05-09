@@ -17,6 +17,11 @@ def _set_encryption_key(monkeypatch):
 
 class TestEncryptionUtils:
     def test_encrypt_decrypt_roundtrip(self):
+        """Проверяет базовый roundtrip Fernet-шифрования.
+
+        Что делает: шифрует строковый секрет и затем расшифровывает результат.
+        Ожидаемая реакция: ciphertext отличается от plaintext, выглядит как Fernet-token и decrypt возвращает исходный секрет.
+        """
         secret = "my_super_secret_password"
         encrypted = encrypt_value(secret)
         assert encrypted != secret
@@ -25,25 +30,53 @@ class TestEncryptionUtils:
         assert decrypted == secret
 
     def test_encrypt_none_returns_none(self):
+        """Проверяет обработку `None` при шифровании.
+
+        Что делает: вызывает `encrypt_value(None)`.
+        Ожидаемая реакция: функция возвращает `None`, чтобы optional secret-поля можно было хранить пустыми.
+        """
         assert encrypt_value(None) is None
 
     def test_encrypt_empty_string_returns_empty(self):
+        """Проверяет обработку пустой строки при шифровании.
+
+        Что делает: вызывает `encrypt_value("")`.
+        Ожидаемая реакция: функция возвращает пустую строку без создания Fernet-token для отсутствующего значения.
+        """
         assert encrypt_value("") == ""
 
     def test_decrypt_none_returns_none(self):
+        """Проверяет обработку `None` при расшифровке.
+
+        Что делает: вызывает `decrypt_value(None)`.
+        Ожидаемая реакция: функция возвращает `None`, не падая на optional encrypted-полях.
+        """
         assert decrypt_value(None) is None
 
     def test_decrypt_empty_string_returns_empty(self):
+        """Проверяет обработку пустой строки при расшифровке.
+
+        Что делает: вызывает `decrypt_value("")`.
+        Ожидаемая реакция: функция возвращает пустую строку, сохраняя симметрию с `encrypt_value("")`.
+        """
         assert decrypt_value("") == ""
 
     def test_decrypt_unencrypted_raises(self):
-        """Проверяет ошибку на нешифрованной строке."""
+        """Проверяет отказ при попытке расшифровать plaintext.
+
+        Что делает: передаёт не-Fernet строку в `decrypt_value`.
+        Ожидаемая реакция: cryptography выбрасывает исключение, чтобы незашифрованные секреты не считались валидными.
+        """
         plaintext = "not_encrypted_password"
         with pytest.raises(Exception):
             decrypt_value(plaintext)
 
     def test_different_encryption_outputs(self):
-        """Проверяет различие ciphertext для одинакового ввода."""
+        """Проверяет недетерминированность Fernet ciphertext.
+
+        Что делает: дважды шифрует один и тот же секрет.
+        Ожидаемая реакция: ciphertext-ы разные, но оба успешно расшифровываются в исходное значение.
+        """
         secret = "same_secret"
         enc1 = encrypt_value(secret)
         enc2 = encrypt_value(secret)
@@ -54,7 +87,11 @@ class TestEncryptionUtils:
 
 class TestServerEncryption:
     def test_password_encrypted_in_db(self, db_session):
-        """Проверяет шифрование password в БД."""
+        """Проверяет, что SSH password хранится в БД зашифрованным.
+
+        Что делает: создаёт Server с plaintext password и читает сырой столбец `password` SQL-запросом.
+        Ожидаемая реакция: в БД лежит Fernet-token, а не исходный пароль.
+        """
         from models.server import Server
 
         server = Server(
@@ -74,7 +111,11 @@ class TestServerEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_password_decrypted_on_read(self, db_session):
-        """Проверяет чтение password через property."""
+        """Проверяет прозрачное чтение SSH password через model property.
+
+        Что делает: сохраняет сервер с password, обновляет объект из БД и читает `server.password`.
+        Ожидаемая реакция: property возвращает исходный plaintext только на уровне Python-модели.
+        """
         from models.server import Server
 
         server = Server(
@@ -90,7 +131,11 @@ class TestServerEncryption:
         assert server.password == "plain_password_123"
 
     def test_ssh_key_encrypted_in_db(self, db_session):
-        """Проверяет шифрование SSH-ключа в БД."""
+        """Проверяет, что приватный SSH key хранится в БД зашифрованным.
+
+        Что делает: создаёт Server с приватным ключом и читает сырой столбец `ssh_key`.
+        Ожидаемая реакция: в БД лежит Fernet-token, а не PEM-текст ключа.
+        """
         from models.server import Server
 
         key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
@@ -111,7 +156,11 @@ class TestServerEncryption:
         assert row[0].startswith("gAAAAA")
 
     def test_ssh_key_decrypted_on_read(self, db_session):
-        """Проверяет чтение SSH-ключа через property."""
+        """Проверяет прозрачное чтение SSH key через model property.
+
+        Что делает: сохраняет сервер с приватным ключом, обновляет объект из БД и читает `server.ssh_key`.
+        Ожидаемая реакция: property возвращает исходный PEM-текст для подключения, не раскрывая его в API response.
+        """
         from models.server import Server
 
         key = "-----BEGIN RSA PRIVATE KEY-----\ntest_key_content\n-----END RSA PRIVATE KEY-----"
@@ -128,7 +177,11 @@ class TestServerEncryption:
         assert server.ssh_key == key
 
     def test_none_password_and_ssh_key(self, db_session):
-        """Проверяет обработку None."""
+        """Проверяет optional SSH credential поля модели.
+
+        Что делает: создаёт Server без password и ssh_key.
+        Ожидаемая реакция: оба property возвращают `None`, а модель не падает на пустых credential.
+        """
         from models.server import Server
 
         server = Server(
@@ -144,7 +197,11 @@ class TestServerEncryption:
         assert server.ssh_key is None
 
     def test_password_update_via_setattr(self, db_session):
-        """Проверяет обновление password через setattr."""
+        """Проверяет шифрование password при обновлении через `setattr`.
+
+        Что делает: создаёт Server без password, затем задаёт новый password через `setattr` и читает сырой столбец БД.
+        Ожидаемая реакция: property возвращает plaintext, а в БД хранится Fernet-token.
+        """
         from models.server import Server
 
         server = Server(
@@ -170,7 +227,11 @@ class TestServerEncryption:
 
 class TestServerAPIEncryption:
     def test_create_server_response_excludes_secrets(self, client, auth_headers):
-        """Проверяет отсутствие секретов в ответе POST /servers."""
+        """Проверяет, что `POST /servers` не возвращает секреты.
+
+        Что делает: создаёт сервер через API с password и анализирует JSON response.
+        Ожидаемая реакция: ответ содержит публичные поля сервера, но не содержит `password` и `ssh_key`.
+        """
         response = client.post(
             "/api/v1/servers",
             json={
@@ -187,7 +248,11 @@ class TestServerAPIEncryption:
         assert "ssh_key" not in data
 
     def test_get_servers_excludes_secrets(self, client, auth_headers):
-        """Проверяет отсутствие секретов в ответе GET /servers."""
+        """Проверяет, что `GET /servers` не раскрывает секреты.
+
+        Что делает: создаёт сервер с password и запрашивает список серверов.
+        Ожидаемая реакция: элементы списка не содержат `password` и `ssh_key`, даже если они есть в БД.
+        """
         client.post(
             "/api/v1/servers",
             json={

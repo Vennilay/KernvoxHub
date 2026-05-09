@@ -193,7 +193,7 @@ def list_servers(limit):
         click.echo("-" * 86)
         for server in servers:
             status_text = "active" if server.is_active else "inactive"
-            auth_method = "key" if server.ssh_key else "password" if server.password else "none"
+            auth_method = "key" if server._ssh_key_encrypted else "password" if server._password_encrypted else "none"
             click.echo(
                 f"{server.id:>4}  {status_text:<8} "
                 f"{server.name[:24]:<24} {server.host}:{server.port:<16} {auth_method:<8}"

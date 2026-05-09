@@ -7,8 +7,14 @@ class TestServerRebootAction:
         client,
         db_session,
         auth_headers,
+        action_headers,
         monkeypatch,
     ):
+        """Проверяет успешный reboot action без реальной перезагрузки.
+
+        Что делает: подменяет SSH reboot сервис, вызывает `POST /servers/{id}/actions/reboot` с API-ключом и action-key.
+        Ожидаемая реакция: API возвращает `202 Accepted`, сохраняет впервые найденный host key и пишет audit-запись со статусом `accepted`.
+        """
         from api.routes import actions as actions_route
         from models.action_audit import ActionAudit
         from models.server import Server
@@ -31,7 +37,7 @@ class TestServerRebootAction:
 
         response = client.post(
             f"/api/v1/servers/{server.id}/actions/reboot",
-            headers=auth_headers,
+            headers={**auth_headers, **action_headers},
         )
 
         assert response.status_code == status.HTTP_202_ACCEPTED
@@ -53,17 +59,20 @@ class TestServerRebootAction:
         client,
         db_session,
         auth_headers,
+        action_headers,
         monkeypatch,
     ):
+        """Проверяет обязательность `X-Action-Key` для reboot endpoint.
+
+        Что делает: сначала вызывает reboot без action-key, затем повторяет запрос с корректным action-key и подменённым SSH-результатом.
+        Ожидаемая реакция: первый запрос получает `403`, второй доходит до сервиса и возвращает ожидаемый `503` от подменённой команды.
+        """
         from api.routes import actions as actions_route
-        from config import settings
         from models.server import Server
 
         server = Server(name="test-server", host="192.168.1.100", username="root")
         db_session.add(server)
         db_session.commit()
-
-        monkeypatch.setattr(settings, "SERVER_ACTION_TOKEN", "action-secret")
 
         response = client.post(
             f"/api/v1/servers/{server.id}/actions/reboot",
@@ -80,7 +89,34 @@ class TestServerRebootAction:
         monkeypatch.setattr(actions_route, "reboot_server", fake_reboot)
         response = client.post(
             f"/api/v1/servers/{server.id}/actions/reboot",
-            headers={**auth_headers, "X-Action-Key": "action-secret"},
+            headers={**auth_headers, **action_headers},
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+    def test_reboot_action_fails_closed_when_action_key_is_not_configured(
+        self,
+        client,
+        db_session,
+        auth_headers,
+        monkeypatch,
+    ):
+        """Проверяет fail-closed режим destructive endpoints.
+
+        Что делает: временно очищает `SERVER_ACTION_TOKEN` и вызывает reboot endpoint с обычным API-ключом.
+        Ожидаемая реакция: API возвращает `503` и не выполняет действие, чтобы пустая конфигурация не открывала reboot.
+        """
+        from config import settings
+        from models.server import Server
+
+        server = Server(name="test-server", host="192.168.1.100", username="root")
+        db_session.add(server)
+        db_session.commit()
+        monkeypatch.setattr(settings, "SERVER_ACTION_TOKEN", "")
+
+        response = client.post(
+            f"/api/v1/servers/{server.id}/actions/reboot",
+            headers=auth_headers,
         )
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
@@ -90,8 +126,14 @@ class TestServerRebootAction:
         client,
         db_session,
         auth_headers,
+        action_headers,
         monkeypatch,
     ):
+        """Проверяет реакцию reboot endpoint на несовпадение SSH host key.
+
+        Что делает: подменяет reboot сервис результатом `host_key_mismatch` и вызывает endpoint с корректными ключами.
+        Ожидаемая реакция: API возвращает `503 Host key verification failed` и сохраняет audit-запись со статусом `host_key_mismatch`.
+        """
         from api.routes import actions as actions_route
         from models.action_audit import ActionAudit
         from models.server import Server
@@ -113,7 +155,7 @@ class TestServerRebootAction:
 
         response = client.post(
             f"/api/v1/servers/{server.id}/actions/reboot",
-            headers=auth_headers,
+            headers={**auth_headers, **action_headers},
         )
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
@@ -121,6 +163,11 @@ class TestServerRebootAction:
         assert db_session.query(ActionAudit).one().status == "host_key_mismatch"
 
     def test_get_server_actions(self, client, db_session, auth_headers):
+        """Проверяет выдачу audit history по серверу.
+
+        Что делает: создаёт audit-запись reboot и вызывает `GET /api/v1/servers/{id}/actions`.
+        Ожидаемая реакция: API возвращает `200 OK` и список действий, где первая запись содержит action `reboot`.
+        """
         from models.action_audit import ActionAudit
         from models.server import Server
 

@@ -83,7 +83,7 @@ curl -X POST http://localhost/api/v1/servers/1/actions/reboot \
   -H "X-Action-Key: <server_action_token>"
 ```
 
-`X-Action-Key` берётся из `.env` переменной `SERVER_ACTION_TOKEN`. Если переменная не задана, endpoint работает только по обычному `X-API-Key`, но для production лучше держать отдельный action-token.
+`X-Action-Key` берётся из `.env` переменной `SERVER_ACTION_TOKEN`. Если переменная не задана, destructive endpoints не выполняются: это fail-closed защита от случайного запуска без отдельного action-token.
 
 Ответ при принятой команде:
 
@@ -192,12 +192,19 @@ docker compose up -d --build
 docker compose logs -f backend
 ```
 
-Тесты лежат в `backend/tests/`. При изменениях в SSH, auth, encryption, reboot или installer/update добавляйте регрессионные тесты рядом с затронутым поведением.
+Тесты лежат в `backend/tests/` и разнесены по назначению:
+
+- `backend/tests/api/` - API и middleware;
+- `backend/tests/unit/` - чистые сервисы, парсеры, encryption, SSH helpers;
+- `backend/tests/cli/` - команды `python -m cli.main`;
+- `backend/tests/scripts/` - installer, updater и shell wrappers.
+
+Каждый тест содержит docstring с назначением сценария. При изменениях в SSH, auth, encryption, reboot или installer/update добавляйте регрессионные тесты рядом с затронутым поведением.
 
 ## Безопасность
 
 - SSH host key сохраняется при первом успешном подключении и затем проверяется при каждом новом подключении.
 - Пароли, приватные SSH-ключи и host key хранятся в базе зашифрованными через Fernet.
-- API закрыт `X-API-Key`, а destructive actions дополнительно закрываются `X-Action-Key`.
+- API закрыт `X-API-Key`, а destructive actions дополнительно закрываются `X-Action-Key`. Если `SERVER_ACTION_TOKEN` не настроен, destructive endpoints отказывают в выполнении.
 - Для reboot используйте отдельного SSH-пользователя и минимальные sudoers-права.
 - При смене host/port у сервера сохранённый host key сбрасывается, чтобы не доверять старому ключу для нового адреса.

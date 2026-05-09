@@ -7,8 +7,16 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-BACKEND_DIR = REPO_ROOT / "backend"
+def find_backend_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "services").is_dir() and (candidate / "config.py").exists():
+            return candidate
+        if (candidate / "backend" / "services").is_dir():
+            return candidate / "backend"
+    raise RuntimeError("Could not locate repository root")
+
+
+BACKEND_DIR = find_backend_root()
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -26,6 +34,7 @@ config_stub.settings = SimpleNamespace(
     REDIS_PASSWORD=os.environ["REDIS_PASSWORD"],
     API_SECRET=os.environ["API_SECRET"],
     API_TOKEN=os.environ["API_TOKEN"],
+    SERVER_ACTION_TOKEN="test_action_token",
     ENCRYPTION_KEY=os.environ["ENCRYPTION_KEY"],
 )
 sys.modules.setdefault("config", config_stub)
@@ -75,6 +84,11 @@ class TokenManagerTestCase(unittest.TestCase):
         token_manager.BOOTSTRAP_API_KEY = self.original_bootstrap
 
     def test_bootstrap_token_is_independent_from_api_secret(self) -> None:
+        """Проверяет, что bootstrap API token не выводится из `API_SECRET`.
+
+        Что делает: формирует legacy-token из `API_SECRET` и валидирует его вместе с настоящим `API_TOKEN`.
+        Ожидаемая реакция: legacy-token отклоняется, а bootstrap token из env принимается.
+        """
         legacy_token = f"kvx_{os.environ['API_SECRET'][:32]}"
 
         self.assertEqual(token_manager.get_bootstrap_api_key(), os.environ["API_TOKEN"])
@@ -82,6 +96,11 @@ class TokenManagerTestCase(unittest.TestCase):
         self.assertTrue(token_manager.validate_api_token(os.environ["API_TOKEN"]))
 
     def test_generate_api_token_persists_only_hash(self) -> None:
+        """Проверяет безопасное хранение выпущенных API-токенов.
+
+        Что делает: генерирует новый token через fake Redis и смотрит содержимое Redis set.
+        Ожидаемая реакция: сохраняется только SHA-256 hash токена, сам plaintext token в Redis set отсутствует.
+        """
         token = token_manager.generate_api_token()
         token_hash = token_manager._hash_token(token)
 
@@ -90,6 +109,11 @@ class TokenManagerTestCase(unittest.TestCase):
         self.assertNotIn(token, self.fake_redis.sets[token_manager.TOKEN_HASH_SET_KEY])
 
     def test_validate_generated_token_uses_hash_storage(self) -> None:
+        """Проверяет валидацию сгенерированного token через hash storage.
+
+        Что делает: генерирует token, валидирует его и проверяет cache key в fake Redis.
+        Ожидаемая реакция: token принимается, а cache хранится по hash, не раскрывая plaintext.
+        """
         token = token_manager.generate_api_token()
 
         self.assertTrue(token_manager.validate_api_token(token))
@@ -99,6 +123,11 @@ class TokenManagerTestCase(unittest.TestCase):
         )
 
     def test_generate_api_token_requires_redis_for_persistence(self) -> None:
+        """Проверяет отказ выпуска новых API-токенов без Redis.
+
+        Что делает: временно отключает Redis-клиент и вызывает `generate_api_token`.
+        Ожидаемая реакция: функция выбрасывает `RuntimeError`, чтобы не выдавать token, который нельзя сохранить/отозвать.
+        """
         token_manager.redis_client = None
 
         with self.assertRaises(RuntimeError):

@@ -9,11 +9,13 @@ from cryptography.fernet import Fernet
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
 _TEST_API_SECRET = "test_api_secret_for_development"
 _TEST_API_TOKEN = "kvx_test_bootstrap_token"
+_TEST_ACTION_TOKEN = "test_action_token"
 _TEST_REDIS_PASSWORD = "test_redis_password"
 
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_ENCRYPTION_KEY)
 os.environ.setdefault("API_SECRET", _TEST_API_SECRET)
 os.environ.setdefault("API_TOKEN", _TEST_API_TOKEN)
+os.environ.setdefault("SERVER_ACTION_TOKEN", _TEST_ACTION_TOKEN)
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("REDIS_PASSWORD", _TEST_REDIS_PASSWORD)
@@ -69,6 +71,11 @@ def client(db_session):
 @pytest.fixture(scope="function")
 def auth_headers():
     return {"X-API-Key": os.environ["API_TOKEN"]}
+
+
+@pytest.fixture(scope="function")
+def action_headers():
+    return {"X-Action-Key": os.environ["SERVER_ACTION_TOKEN"]}
 
 
 @pytest.fixture(scope="function")

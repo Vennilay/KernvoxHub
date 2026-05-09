@@ -27,7 +27,10 @@ def _get_requester(request: Request) -> str:
 
 def _require_action_key(request: Request) -> None:
     if not settings.SERVER_ACTION_TOKEN:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SERVER_ACTION_TOKEN is not configured",
+        )
 
     provided = request.headers.get(ACTION_KEY_HEADER, "")
     if not hmac.compare_digest(provided, settings.SERVER_ACTION_TOKEN):

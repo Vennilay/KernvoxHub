@@ -30,6 +30,12 @@ class ServerUpdate(BaseModel):
     password: Optional[str] = None
     is_active: Optional[bool] = None
 
+    @model_validator(mode="after")
+    def validate_credentials(self):
+        if self.password and self.ssh_key:
+            raise ValueError("Provide only one SSH credential: password or ssh_key")
+        return self
+
 
 class ServerResponse(ServerBase):
     id: int

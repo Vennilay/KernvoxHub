@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -12,7 +13,10 @@ from config import settings
 app = FastAPI(
     title="KernvoxHub API",
     description="Backend для сбора метрик с серверов и предоставления данных Android-приложению Kernvox",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -53,7 +57,7 @@ async def startup_event():
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to KernvoxHub API", "docs": "/docs"}
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
 
 @app.get("/api/v1/health")

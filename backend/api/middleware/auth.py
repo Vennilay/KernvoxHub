@@ -1,4 +1,5 @@
 import logging
+import ipaddress
 from typing import Callable, Optional
 
 from fastapi import Request
@@ -9,7 +10,8 @@ from services.redis_client import redis_client
 logger = logging.getLogger(__name__)
 
 API_KEY_HEADER = "X-API-Key"
-PUBLIC_PATHS = {"/", "/docs", "/openapi.json", "/api/v1/health", "/redoc"}
+NOT_FOUND_PATHS = {"/", "/docs", "/openapi.json", "/redoc"}
+LOCAL_HEALTH_PATHS = {"/api/v1/health"}
 
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX_ATTEMPTS = 10
@@ -23,20 +25,30 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _is_loopback_client(client_ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(client_ip).is_loopback
+    except ValueError:
+        return False
+
+
 async def _check_rate_limit(client_ip: str) -> Optional[str]:
     if not redis_client:
         return
 
-    ban_key = f"auth_ban:{client_ip}"
-    if redis_client.get(ban_key):
-        return "banned"
+    try:
+        ban_key = f"auth_ban:{client_ip}"
+        if redis_client.get(ban_key):
+            return "banned"
 
-    attempts_key = f"auth_attempts:{client_ip}"
-    attempts = int(redis_client.get(attempts_key) or 0)
-    if attempts >= RATE_LIMIT_MAX_ATTEMPTS:
-        redis_client.setex(ban_key, RATE_LIMIT_BAN_SECONDS, "1")
-        redis_client.delete(attempts_key)
-        return "banned"
+        attempts_key = f"auth_attempts:{client_ip}"
+        attempts = int(redis_client.get(attempts_key) or 0)
+        if attempts >= RATE_LIMIT_MAX_ATTEMPTS:
+            redis_client.setex(ban_key, RATE_LIMIT_BAN_SECONDS, "1")
+            redis_client.delete(attempts_key)
+            return "banned"
+    except Exception as exc:
+        logger.error("Rate limit check failed: %s", exc)
 
     return None
 
@@ -44,11 +56,14 @@ async def _check_rate_limit(client_ip: str) -> Optional[str]:
 async def _record_failed_attempt(client_ip: str) -> None:
     if not redis_client:
         return
-    attempts_key = f"auth_attempts:{client_ip}"
-    pipe = redis_client.pipeline()
-    pipe.incr(attempts_key)
-    pipe.expire(attempts_key, RATE_LIMIT_WINDOW)
-    pipe.execute()
+    try:
+        attempts_key = f"auth_attempts:{client_ip}"
+        pipe = redis_client.pipeline()
+        pipe.incr(attempts_key)
+        pipe.expire(attempts_key, RATE_LIMIT_WINDOW)
+        pipe.execute()
+    except Exception as exc:
+        logger.error("Failed to record auth attempt: %s", exc)
 
 
 def _unauthorized(detail: str) -> JSONResponse:
@@ -63,10 +78,13 @@ def _too_many_requests() -> JSONResponse:
 
 
 async def api_key_middleware(request: Request, call_next: Callable) -> Response:
-    if request.url.path in PUBLIC_PATHS:
+    if request.url.path in NOT_FOUND_PATHS:
         return await call_next(request)
 
     client_ip = _get_client_ip(request)
+    if request.url.path in LOCAL_HEALTH_PATHS and _is_loopback_client(client_ip):
+        return await call_next(request)
+
     rate_result = await _check_rate_limit(client_ip)
     if rate_result == "banned":
         return _too_many_requests()
