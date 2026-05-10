@@ -138,12 +138,26 @@ class SSHClient:
         )
         return False
 
-    def execute(self, command: str, timeout: int = 10) -> Tuple[int, str, str]:
+    def execute(
+        self,
+        command: str,
+        timeout: int = 10,
+        input_data: Optional[str] = None,
+        get_pty: bool = False,
+    ) -> Tuple[int, str, str]:
         if not self.client:
             return -1, "", "Not connected"
 
         try:
-            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+            stdin, stdout, stderr = self.client.exec_command(
+                command,
+                timeout=timeout,
+                get_pty=get_pty,
+            )
+            if input_data is not None:
+                stdin.write(input_data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
             exit_code = stdout.channel.recv_exit_status()
             output = stdout.read().decode('utf-8', errors='replace')
             error = stderr.read().decode('utf-8', errors='replace')

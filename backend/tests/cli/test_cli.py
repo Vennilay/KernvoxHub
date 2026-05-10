@@ -157,3 +157,57 @@ def test_reboot_server_command_records_audit(monkeypatch):
         assert audit.requested_by == "cli"
     finally:
         db.close()
+
+
+def test_setup_reboot_sudo_prompts_one_time_password_for_key_server(monkeypatch):
+    """Проверяет настройку reboot sudoers для key-only сервера.
+
+    Что делает: первый вызов сервиса без пароля возвращает failed, CLI спрашивает одноразовый sudo-пароль и повторяет настройку.
+    Ожидаемая реакция: команда завершается успешно, пароль не сохраняется в БД, второй вызов получает введённый sudo-пароль.
+    """
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(cli_main, "SessionLocal", testing_session)
+
+    calls = []
+
+    def fake_configure(_connection, sudo_password=None):
+        calls.append(sudo_password)
+        if sudo_password is None:
+            return ServerActionResult(status="failed", message="sudo password required")
+        return ServerActionResult(status="configured", message="configured")
+
+    monkeypatch.setattr(cli_main, "configure_reboot_sudo", fake_configure)
+
+    db = testing_session()
+    try:
+        server = Server(name="Moscow", host="31.56.211.178", port=2222, username="zeno")
+        server.ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key\n-----END OPENSSH PRIVATE KEY-----\n"
+        db.add(server)
+        db.commit()
+        server_id = server.id
+    finally:
+        db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main.cli,
+        ["setup-reboot-sudo", str(server_id), "--yes"],
+        input="sudo-secret\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [None, "sudo-secret"]
+    assert "Reboot sudoers настроен" in result.output
+
+    db = testing_session()
+    try:
+        server = db.query(Server).one()
+        assert server.password is None
+    finally:
+        db.close()

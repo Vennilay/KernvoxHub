@@ -9,7 +9,11 @@ from models.action_audit import ActionAudit
 from models.server import Server
 from models.metric import Metric
 from collector.ssh_client import SSHClient, HostKeyMismatchError
-from services.server_actions import ServerConnectionData, reboot_server as run_reboot_server
+from services.server_actions import (
+    ServerConnectionData,
+    configure_reboot_sudo,
+    reboot_server as run_reboot_server,
+)
 from services.token_manager import generate_api_token
 
 
@@ -58,7 +62,23 @@ def generate_token():
     show_default=True,
     help="Проверить SSH-подключение сразу после добавления.",
 )
-def add_server(name, host, port, username, auth_method, password, ssh_key, ssh_key_file, test_connection):
+@click.option(
+    "--setup-reboot-sudo",
+    is_flag=True,
+    help="Настроить минимальный NOPASSWD sudoers для reboot на удалённом сервере.",
+)
+def add_server(
+    name,
+    host,
+    port,
+    username,
+    auth_method,
+    password,
+    ssh_key,
+    ssh_key_file,
+    test_connection,
+    setup_reboot_sudo,
+):
     """Добавляет сервер."""
     db = SessionLocal()
     try:
@@ -78,6 +98,13 @@ def add_server(name, host, port, username, auth_method, password, ssh_key, ssh_k
 
         if test_connection:
             _test_server_connection(db, server)
+        if setup_reboot_sudo:
+            _setup_reboot_sudo(server)
+        elif auth_method.lower() == "key":
+            click.echo(
+                f"ℹ️  Для reboot по SSH-ключу без sudo-пароля выполните: "
+                f"kernvoxhub setup-reboot-sudo {server.id}"
+            )
     except Exception as e:
         db.rollback()
         click.echo(f"❌ Ошибка: {e}", err=True)
@@ -258,6 +285,34 @@ def reboot_server_command(server_id, yes):
         db.close()
 
 
+@cli.command("setup-reboot-sudo")
+@click.argument("server_id", type=int)
+@click.option("--yes", is_flag=True, help="Не запрашивать подтверждение.")
+@click.option(
+    "--sudo-password",
+    hide_input=True,
+    help="Одноразовый sudo-пароль удалённого пользователя. Не сохраняется.",
+)
+def setup_reboot_sudo_command(server_id, yes, sudo_password):
+    """Настраивает минимальный passwordless sudoers для reboot."""
+    db = SessionLocal()
+    try:
+        server = _get_cli_server(db, server_id)
+        if not yes:
+            click.confirm(
+                f"Настроить NOPASSWD sudoers для reboot на '{server.name}' ({server.host}:{server.port})?",
+                abort=True,
+            )
+        _setup_reboot_sudo(server, sudo_password=sudo_password)
+    except click.ClickException:
+        raise
+    except Exception as e:
+        click.echo(f"❌ Ошибка: {e}", err=True)
+        sys.exit(1)
+    finally:
+        db.close()
+
+
 @cli.command()
 @click.argument("server_id", type=int)
 def delete_server(server_id):
@@ -319,6 +374,23 @@ def _test_server_connection(db, server: Server) -> None:
         raise click.ClickException(f"Проверка host key не прошла: {e}") from e
     finally:
         ssh.close()
+
+
+def _setup_reboot_sudo(server: Server, sudo_password: str | None = None) -> None:
+    click.echo(f"Настраиваю reboot sudoers на {server.host}:{server.port}...")
+    connection = _connection_data_from_server(server)
+    password_to_try = sudo_password or server.password
+    result = configure_reboot_sudo(connection, sudo_password=password_to_try)
+
+    if result.status != "configured" and sudo_password is None:
+        click.echo("Sudo требует пароль. Введите его один раз; он не будет сохранён.")
+        password_to_try = click.prompt("sudo пароль", hide_input=True)
+        result = configure_reboot_sudo(connection, sudo_password=password_to_try)
+
+    if result.status != "configured":
+        raise click.ClickException(f"Не удалось настроить reboot sudoers: {result.message}")
+
+    click.echo("✅ Reboot sudoers настроен. Теперь key-only сервер сможет перезагружаться без sudo-пароля.")
 
 
 @cli.command()
