@@ -64,12 +64,32 @@ CLI спросит имя, адрес, SSH-порт, пользователя и
 2. Используйте SSH key auth вместо пароля.
 3. Для перезагрузки разрешите только нужную команду через sudoers, например `/sbin/shutdown -r now`, без полного root-доступа.
 
+Если sudo на сервере требует пароль, KernvoxHub сначала пробует безопасный
+non-interactive путь (`sudo -n`). Для серверов, добавленных с SSH-паролем,
+есть fallback через `sudo -S`: пароль передаётся только в stdin SSH-команды и
+не попадает в shell-строку. Для key-only production всё равно настройте
+минимальный sudoers `NOPASSWD`. Это можно сделать из KernvoxHub без сохранения
+sudo-пароля:
+
+```bash
+kernvoxhub setup-reboot-sudo 1
+```
+
+Команда подключится по уже сохранённому SSH-ключу и, если sudo требует пароль,
+попросит его один раз только для записи `/etc/sudoers.d/kernvoxhub-reboot`.
+Эквивалентная запись:
+
+```sudoers
+kernvox ALL=(root) NOPASSWD: /sbin/shutdown -r now, /usr/sbin/shutdown -r now, /usr/bin/systemctl reboot, /sbin/reboot, /usr/sbin/reboot
+```
+
 Полезные команды:
 
 ```bash
 kernvoxhub list-servers
 kernvoxhub test-server 1
 kernvoxhub metrics 1
+kernvoxhub setup-reboot-sudo 1
 kernvoxhub reboot-server 1 --yes
 ```
 

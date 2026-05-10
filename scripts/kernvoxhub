@@ -125,6 +125,7 @@ Usage:
   kernvoxhub add-server   Run interactive server onboarding inside backend.
   kernvoxhub list-servers List configured servers.
   kernvoxhub test-server <id>
+  kernvoxhub setup-reboot-sudo <id> [--yes]
   kernvoxhub reboot-server <id> [--yes]
   kernvoxhub metrics <id>
 EOF
@@ -352,6 +353,10 @@ main() {
         test-server)
             shift
             run_backend_cli "$install_root" test-server "$@"
+            ;;
+        setup-reboot-sudo)
+            shift
+            run_backend_cli "$install_root" setup-reboot-sudo "$@"
             ;;
         reboot-server)
             shift
