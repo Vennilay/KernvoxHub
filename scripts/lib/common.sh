@@ -621,17 +621,32 @@ wait_for_service_ready() {
 
 http_probe() {
     local url="$1"
+    local api_token="${API_TOKEN:-}"
 
     if command_exists curl; then
-        curl --silent --show-error --fail --max-time 5 "$url" >/dev/null
+        if [ -n "$api_token" ]; then
+            curl --silent --show-error --fail --max-time 5 -H "X-API-Key: ${api_token}" "$url" >/dev/null
+        else
+            curl --silent --show-error --fail --max-time 5 "$url" >/dev/null
+        fi
     elif command_exists wget; then
-        wget -q -O /dev/null "$url"
+        if [ -n "$api_token" ]; then
+            wget -q -O /dev/null --header="X-API-Key: ${api_token}" "$url"
+        else
+            wget -q -O /dev/null "$url"
+        fi
     elif command_exists python3; then
-        python3 - <<PY >/dev/null 2>&1
+        python3 - "$url" <<'PY' >/dev/null 2>&1
+import os
 import sys
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
-with urlopen("${url}", timeout=5) as response:
+headers = {}
+api_token = os.environ.get("API_TOKEN")
+if api_token:
+    headers["X-API-Key"] = api_token
+
+with urlopen(Request(sys.argv[1], headers=headers), timeout=5) as response:
     if response.status >= 400:
         sys.exit(1)
 PY
