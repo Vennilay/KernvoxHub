@@ -81,7 +81,7 @@ request_certificate() {
     wait_for_service_ready nginx 120 || die "Nginx не готов к выпуску сертификата."
 
     info "Запрашиваю сертификат Let's Encrypt для ${DOMAIN}..."
-    compose_run run --rm certbot certonly \
+    compose_run run --rm --entrypoint certbot certbot certonly \
         --non-interactive \
         --webroot \
         --webroot-path=/var/www/certbot \
