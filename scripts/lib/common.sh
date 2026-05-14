@@ -393,6 +393,44 @@ install_http_probe_client_if_missing() {
     install_packages "$family" curl
 }
 
+apparmor_is_enabled() {
+    local enabled_path="${KERNVOX_APPARMOR_ENABLED_PATH:-/sys/module/apparmor/parameters/enabled}"
+    local enabled_value=""
+
+    [ -r "$enabled_path" ] || return 1
+    enabled_value="$(head -c 1 "$enabled_path" 2>/dev/null || true)"
+    [ "$enabled_value" = "Y" ] || [ "$enabled_value" = "y" ] || [ "$enabled_value" = "1" ]
+}
+
+install_apparmor_parser_if_needed() {
+    local family="$1"
+
+    [ "$(uname -s)" = "Linux" ] || return 0
+    apparmor_is_enabled || return 0
+    command_exists apparmor_parser && return 0
+
+    info "AppArmor включён, но apparmor_parser не найден. Устанавливаю зависимость для Docker build..."
+
+    case "$family" in
+        debian)
+            run_privileged apt-get update
+            install_packages "$family" apparmor
+            ;;
+        rhel)
+            install_packages "$family" apparmor-parser || install_packages "$family" apparmor
+            ;;
+        arch)
+            install_packages "$family" apparmor
+            ;;
+        *)
+            die "AppArmor включён, но apparmor_parser не найден. Установите пакет apparmor и повторите запуск."
+            ;;
+    esac
+
+    command_exists apparmor_parser || \
+        die "AppArmor включён, но apparmor_parser всё ещё недоступен после установки. Установите пакет apparmor и повторите запуск."
+}
+
 install_docker_on_linux() {
     local family="$1"
 

@@ -104,6 +104,57 @@ class EnvHelpersTestCase(unittest.TestCase):
 
 
 class SetupScriptTestCase(unittest.TestCase):
+    def test_compose_keeps_redis_password_out_of_redis_url(self) -> None:
+        """Проверяет безопасную передачу Redis password в Docker Compose.
+
+        Что делает: читает `docker-compose.yml` и проверяет, что `REDIS_URL` не собирается через raw password interpolation.
+        Ожидаемая реакция: пароль передаётся отдельной переменной, чтобы спецсимволы не ломали URL parser backend.
+        """
+        compose_file = REPO_ROOT / "docker-compose.yml"
+        content = compose_file.read_text()
+
+        self.assertIn("REDIS_URL=redis://redis:6379/0", content)
+        self.assertNotIn("REDIS_URL=redis://:${REDIS_PASSWORD", content)
+
+    def test_installer_installs_apparmor_parser_when_apparmor_is_enabled(self) -> None:
+        """Проверяет preflight для Docker build на AppArmor-хостах.
+
+        Что делает: имитирует включённый AppArmor и отсутствие `apparmor_parser`.
+        Ожидаемая реакция: installer ставит пакет `apparmor` до запуска Docker build.
+        """
+        apparmor_flag = Path(tempfile.mkstemp(prefix="kernvox-apparmor.")[1])
+        apparmor_flag.write_text("Y")
+
+        try:
+            result = run_shell(
+                f"""
+                . "{SCRIPTS_DIR / 'lib' / 'common.sh'}"
+                KERNVOX_APPARMOR_ENABLED_PATH="{apparmor_flag}"
+                installed=n
+                command_exists() {{
+                    if [ "$1" = "apparmor_parser" ]; then
+                        [ "$installed" = "y" ]
+                        return
+                    fi
+                    command -v "$1" >/dev/null 2>&1
+                }}
+                run_privileged() {{
+                    printf 'privileged:%s\\n' "$*"
+                    return 0
+                }}
+                install_packages() {{
+                    printf 'packages:%s\\n' "$*"
+                    installed=y
+                }}
+                install_apparmor_parser_if_needed debian
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("privileged:apt-get update", result.stdout)
+            self.assertIn("packages:debian apparmor", result.stdout)
+        finally:
+            apparmor_flag.unlink(missing_ok=True)
+
     def test_collect_configuration_reprompts_until_valid_values(self) -> None:
         """Проверяет повторный запрос настроек installer при невалидном вводе.
 
@@ -118,6 +169,13 @@ class SetupScriptTestCase(unittest.TestCase):
                 sed -i '$d' "{script_copy}"
                 . "{script_copy}"
                 unset CORS_ORIGINS
+                POSTGRES_PASSWORD=db-secret
+                API_SECRET=api-secret
+                API_TOKEN=kvx-bootstrap-token
+                SERVER_ACTION_TOKEN=action-secret
+                ENCRYPTION_KEY=encryption-secret
+                REDIS_PASSWORD=redis-secret
+                INTERNAL_API_KEY=internal-secret
                 collect_configuration <<'EOF'
 localhost
 bad-email

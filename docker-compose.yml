@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_dev_password}@redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - API_SECRET=${API_SECRET}
       - API_TOKEN=${API_TOKEN:-}
       - SERVER_ACTION_TOKEN=${SERVER_ACTION_TOKEN:-}
@@ -38,7 +38,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro,Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kernvox -d kernvox"]
       interval: 10s
@@ -73,9 +73,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx:/etc/kernvox-nginx:ro
+      - ./nginx:/etc/kernvox-nginx:ro,Z
       - certbot_data:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      - ./certbot/www:/var/www/certbot:z
     depends_on:
       - backend
     healthcheck:
@@ -91,7 +91,7 @@ services:
     container_name: kernvox-certbot
     volumes:
       - certbot_data:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      - ./certbot/www:/var/www/certbot:z
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
     networks:
       - kernvox-network
@@ -103,7 +103,7 @@ services:
     command: python -m collector.scheduler
     environment:
       - DATABASE_URL=postgresql://kernvox:${POSTGRES_PASSWORD}@postgres:5432/kernvox
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_dev_password}@redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - API_SECRET=${API_SECRET}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-redis_dev_password}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}

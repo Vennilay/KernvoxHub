@@ -5,6 +5,11 @@ from collector.ssh_client import SSHClient
 
 class MetricsFetcher:
     KILOBYTES_IN_MEGABYTE = 1000.0
+    CPU_CORE_COUNT_COMMAND = (
+        "getconf _NPROCESSORS_ONLN 2>/dev/null || "
+        "nproc 2>/dev/null || "
+        "awk -F: '/^processor[[:space:]]*:/ {count++} END {print count+0}' /proc/cpuinfo"
+    )
     CPU_PROC_STAT_COMMAND = (
         "read _ prev_user prev_nice prev_system prev_idle prev_iowait prev_irq prev_softirq prev_steal _ < /proc/stat; "
         "prev_total=$((prev_user + prev_nice + prev_system + prev_idle + prev_iowait + prev_irq + prev_softirq + prev_steal)); "
@@ -63,6 +68,24 @@ class MetricsFetcher:
                 pass
         
         return 0.0
+
+    def _get_cpu_core_count(self) -> int:
+        exit_code, output, _ = self.ssh.execute(self.CPU_CORE_COUNT_COMMAND)
+        if exit_code != 0 or not output.strip():
+            return 1
+
+        try:
+            return max(int(float(output.strip().splitlines()[0])), 1)
+        except ValueError:
+            return 1
+
+    @staticmethod
+    def _normalize_process_cpu_percent(raw_cpu_percent: float, cpu_core_count: int) -> float:
+        if cpu_core_count <= 0:
+            cpu_core_count = 1
+
+        normalized = raw_cpu_percent / cpu_core_count
+        return round(min(max(normalized, 0.0), 100.0), 2)
     
     def _get_ram_metrics(self) -> Dict[str, float]:
         exit_code, output, _ = self.ssh.execute("cat /proc/meminfo")
@@ -181,6 +204,7 @@ class MetricsFetcher:
         return {"network_rx_bytes": 0.0, "network_tx_bytes": 0.0}
 
     def get_processes(self, limit: int = 50) -> List[Dict[str, Any]]:
+        cpu_core_count = self._get_cpu_core_count()
         exit_code, output, _ = self.ssh.execute(
             f"ps aux --sort=-%cpu | head -{limit + 1}"
         )
@@ -197,7 +221,9 @@ class MetricsFetcher:
                     processes.append({
                         "pid": int(parts[1]),
                         "user": parts[0],
-                        "cpu_percent": float(parts[2]),
+                        "cpu_percent": self._normalize_process_cpu_percent(
+                            float(parts[2]), cpu_core_count
+                        ),
                         "memory_percent": float(parts[3]),
                         "command": parts[10][:200]
                     })
