@@ -116,6 +116,32 @@ class SetupScriptTestCase(unittest.TestCase):
         self.assertIn("REDIS_URL=redis://redis:6379/0", content)
         self.assertNotIn("REDIS_URL=redis://:${REDIS_PASSWORD", content)
 
+    def test_http_probe_sends_api_key_when_available(self) -> None:
+        """Проверяет authenticated health probe installer'а.
+
+        Что делает: подменяет `curl` и вызывает `http_probe` с `API_TOKEN`.
+        Ожидаемая реакция: probe отправляет `X-API-Key`, потому что внешний health endpoint закрыт auth middleware.
+        """
+        curl_args_file = Path(tempfile.mkstemp(prefix="kernvox-curl-args.")[1])
+
+        try:
+            result = run_shell(
+                f"""
+                . "{SCRIPTS_DIR / 'lib' / 'common.sh'}"
+                API_TOKEN=kvx-test-token
+                command_exists() {{ [ "$1" = "curl" ]; }}
+                curl() {{
+                    printf '%s\\n' "$*" > "{curl_args_file}"
+                }}
+                http_probe "http://127.0.0.1/api/v1/health"
+                """
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("X-API-Key: kvx-test-token", curl_args_file.read_text())
+        finally:
+            curl_args_file.unlink(missing_ok=True)
+
     def test_installer_installs_apparmor_parser_when_apparmor_is_enabled(self) -> None:
         """Проверяет preflight для Docker build на AppArmor-хостах.
 
