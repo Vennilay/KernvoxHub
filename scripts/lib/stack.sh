@@ -20,6 +20,7 @@ ensure_host_dependencies() {
         family="$(detect_linux_family)" || die "Не удалось определить Linux-дистрибутив для установки OpenSSL."
         install_openssl_if_missing "$family"
         install_http_probe_client_if_missing "$family"
+        install_apparmor_parser_if_needed "$family"
         install_compose_if_missing "$family"
     fi
 

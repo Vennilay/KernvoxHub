@@ -130,6 +130,62 @@ def test_cpu_percent_falls_back_to_vmstat():
     assert fetcher._get_cpu_percent() == 88.0
 
 
+def test_process_cpu_percent_is_normalized_by_cpu_core_count():
+    """Проверяет нормализацию CPU процессов для Android endpoint.
+
+    Что делает: имитирует `ps aux`, где многопоточный процесс показывает `600%` на 8 CPU.
+    Ожидаемая реакция: fetcher отдаёт процент от общей мощности сервера, то есть `75%`, а не raw значение `ps`.
+    """
+    ssh = FakeSSHClient(
+        {
+            MetricsFetcher.CPU_CORE_COUNT_COMMAND: (0, "8\n", ""),
+            "ps aux --sort=-%cpu | head -3": (
+                0,
+                "\n".join(
+                    [
+                        "USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND",
+                        "root 101 600.0 2.5 1000 100 ? Sl 10:00 1:00 worker",
+                        "www 102 12.5 1.0 1000 100 ? S 10:00 0:01 nginx: worker process",
+                    ]
+                ),
+                "",
+            ),
+        }
+    )
+
+    processes = MetricsFetcher(ssh).get_processes(limit=2)
+
+    assert processes[0]["cpu_percent"] == 75.0
+    assert processes[1]["cpu_percent"] == 1.56
+
+
+def test_process_cpu_percent_is_capped_after_normalization():
+    """Проверяет верхнюю границу CPU процесса.
+
+    Что делает: имитирует некорректно большое raw `%CPU`.
+    Ожидаемая реакция: API-значение остаётся в диапазоне `0..100`.
+    """
+    ssh = FakeSSHClient(
+        {
+            MetricsFetcher.CPU_CORE_COUNT_COMMAND: (0, "4\n", ""),
+            "ps aux --sort=-%cpu | head -2": (
+                0,
+                "\n".join(
+                    [
+                        "USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND",
+                        "root 101 900.0 2.5 1000 100 ? Sl 10:00 1:00 worker",
+                    ]
+                ),
+                "",
+            ),
+        }
+    )
+
+    processes = MetricsFetcher(ssh).get_processes(limit=1)
+
+    assert processes[0]["cpu_percent"] == 100.0
+
+
 def test_network_metrics_parse_default_interface_with_leading_spaces():
     """Проверяет парсинг network-счётчиков default interface.
 
