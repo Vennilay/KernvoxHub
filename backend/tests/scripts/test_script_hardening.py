@@ -725,6 +725,37 @@ class KernvoxCliTestCase(unittest.TestCase):
 
 
 class SslSetupScriptTestCase(unittest.TestCase):
+    def test_request_certificate_overrides_certbot_renew_entrypoint(self) -> None:
+        """Проверяет запуск certbot certonly вместо service renew-loop.
+
+        Что делает: подменяет `compose_run` и вызывает `request_certificate`.
+        Ожидаемая реакция: SSL setup запускает certbot с `--entrypoint certbot`, чтобы compose service entrypoint не ушёл в renew/sleep.
+        """
+        script_copy = make_script_copy(SCRIPTS_DIR / "ssl-setup.sh")
+        temp_root = Path(tempfile.mkdtemp(prefix="kernvox-ssl-request."))
+
+        try:
+            result = run_shell(
+                f"""
+                sed -i '$d' "{script_copy}"
+                . "{script_copy}"
+                ROOT_DIR="{temp_root}"
+                DOMAIN="api.example.com"
+                EMAIL="ops@example.com"
+                wait_for_service_ready() {{ return 0; }}
+                verify_tls_deployment() {{ return 0; }}
+                compose_run() {{
+                    printf '%s\\n' "$*"
+                }}
+                request_certificate
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("run --rm --entrypoint certbot certbot certonly", result.stdout)
+        finally:
+            script_copy.unlink(missing_ok=True)
+            shutil.rmtree(temp_root, ignore_errors=True)
+
     def test_collect_ssl_configuration_fails_cleanly_on_eof_after_invalid_input(self) -> None:
         """Проверяет корректный отказ SSL setup при EOF после невалидного ввода.
 
