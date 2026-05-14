@@ -155,6 +155,47 @@ class SetupScriptTestCase(unittest.TestCase):
         finally:
             apparmor_flag.unlink(missing_ok=True)
 
+    def test_installer_accepts_apparmor_parser_in_sbin(self) -> None:
+        """Проверяет Debian-путь `apparmor_parser` вне user PATH.
+
+        Что делает: имитирует включённый AppArmor, пустой `command -v apparmor_parser` и бинарник в `/usr/sbin`.
+        Ожидаемая реакция: installer не пытается переустанавливать AppArmor и не падает на PATH обычного пользователя.
+        """
+        apparmor_flag = Path(tempfile.mkstemp(prefix="kernvox-apparmor.")[1])
+        fake_sbin = Path(tempfile.mkdtemp(prefix="kernvox-sbin."))
+        fake_parser = fake_sbin / "apparmor_parser"
+        apparmor_flag.write_text("Y")
+        fake_parser.write_text("#!/bin/sh\nexit 0\n")
+        fake_parser.chmod(0o755)
+
+        try:
+            result = run_shell(
+                f"""
+                . "{SCRIPTS_DIR / 'lib' / 'common.sh'}"
+                KERNVOX_APPARMOR_ENABLED_PATH="{apparmor_flag}"
+                command_exists() {{
+                    if [ "$1" = "apparmor_parser" ]; then
+                        return 1
+                    fi
+                    command -v "$1" >/dev/null 2>&1
+                }}
+                apparmor_parser_exists() {{
+                    command_exists apparmor_parser && return 0
+                    [ -x "{fake_parser}" ] && return 0
+                    return 1
+                }}
+                install_packages() {{
+                    printf 'unexpected-install:%s\\n' "$*"
+                }}
+                install_apparmor_parser_if_needed debian
+                """
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("unexpected-install", result.stdout)
+        finally:
+            apparmor_flag.unlink(missing_ok=True)
+            shutil.rmtree(fake_sbin, ignore_errors=True)
+
     def test_collect_configuration_reprompts_until_valid_values(self) -> None:
         """Проверяет повторный запрос настроек installer при невалидном вводе.
 
