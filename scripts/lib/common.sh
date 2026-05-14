@@ -402,12 +402,19 @@ apparmor_is_enabled() {
     [ "$enabled_value" = "Y" ] || [ "$enabled_value" = "y" ] || [ "$enabled_value" = "1" ]
 }
 
+apparmor_parser_exists() {
+    command_exists apparmor_parser && return 0
+    [ -x /usr/sbin/apparmor_parser ] && return 0
+    [ -x /sbin/apparmor_parser ] && return 0
+    return 1
+}
+
 install_apparmor_parser_if_needed() {
     local family="$1"
 
     [ "$(uname -s)" = "Linux" ] || return 0
     apparmor_is_enabled || return 0
-    command_exists apparmor_parser && return 0
+    apparmor_parser_exists && return 0
 
     info "AppArmor включён, но apparmor_parser не найден. Устанавливаю зависимость для Docker build..."
 
@@ -427,7 +434,7 @@ install_apparmor_parser_if_needed() {
             ;;
     esac
 
-    command_exists apparmor_parser || \
+    apparmor_parser_exists || \
         die "AppArmor включён, но apparmor_parser всё ещё недоступен после установки. Установите пакет apparmor и повторите запуск."
 }
 
