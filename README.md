@@ -1,16 +1,10 @@
 # KernvoxHub
 
-KernvoxHub - центральный сервер для мониторинга Linux-серверов и простых операторских действий через SSH. Он собирает метрики, хранит историю и отдаёт данные REST API для Kernvox/Android-клиента.
+Проект для мониторинга Linux-серверов через телефон. Делал для Samsung Academy, но вышло достаточно рабочим, чтобы использовать и для себя. Идея в том, что бэкенд подключается к серверам по SSH, читает метрики и отдаёт всё через REST API Android-клиенту Kernvox.
 
 ## Что умеет
 
-- собирать CPU, RAM, disk, network, uptime и список процессов;
-- хранить метрики в PostgreSQL/TimescaleDB;
-- кэшировать API-токены в Redis;
-- подключаться к подчинённым серверам по SSH с проверкой host key;
-- хранить SSH-пароли, приватные ключи и host key в зашифрованном виде;
-- перезагружать сервер через защищённый action endpoint или CLI;
-- обновляться одной командой через `kernvoxhub update`.
+Собирает CPU, RAM, диск, сеть, uptime и список процессов. Хранит всё в PostgreSQL/TimescaleDB, токены кэширует в Redis. SSH-ключи и пароли хранятся зашифрованными через Fernet — не в открытом виде. При первом подключении к серверу сохраняется его host key, и если при следующем подключении он поменяется — соединение не установится, это защита от MITM. Ещё можно перезагрузить сервер прямо из API или CLI, но для этого нужен отдельный токен.
 
 ## Архитектура
 
@@ -26,11 +20,11 @@ Nginx -> FastAPI backend -> PostgreSQL + Redis
        Linux servers
 ```
 
-Collector работает отдельным контейнером и по расписанию опрашивает все активные серверы. Backend обслуживает API, CLI-команды внутри контейнера и live-действия вроде просмотра процессов или reboot.
+Collector работает отдельным контейнером и раз в минуту опрашивает все активные серверы. Намеренно не смешивал его с бэкендом — если коллектор упадёт, API продолжит работать.
 
 ## Быстрый старт
 
-Требования: Linux/macOS/WSL, Docker, Docker Compose. Installer может помочь установить недостающие зависимости на популярных Linux-дистрибутивах.
+Нужны Docker и Docker Compose. Если чего-то не хватает — installer может сам поставить на популярных Linux-дистрибутивах.
 
 ```bash
 git clone https://github.com/Vennilay/KernvoxHub.git
@@ -39,9 +33,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-`setup.sh` создаст `.env`, сгенерирует секреты, запустит сервисы и установит системную команду `kernvoxhub`.
-
-Проверка:
+`setup.sh` создаёт `.env` с уже сгенерированными секретами, поднимает контейнеры и прописывает команду `kernvoxhub` в систему. Проверить что всё живо:
 
 ```bash
 docker compose ps
@@ -50,52 +42,38 @@ curl http://localhost/api/v1/health
 
 ## Добавление сервера
 
-Самый простой путь - интерактивная команда:
+Проще всего через CLI:
 
 ```bash
 kernvoxhub add-server --test-connection
 ```
 
-CLI спросит имя, адрес, SSH-порт, пользователя и способ входа: пароль или приватный ключ. При `--test-connection` KernvoxHub сразу подключится к серверу и сохранит SSH host key.
+Команда спросит имя, адрес, SSH-порт, пользователя и как подключаться — паролем или приватным ключом. С флагом `--test-connection` сразу проверит соединение и сохранит host key.
 
-Рекомендованный вариант для production:
-
-1. Создайте отдельного пользователя на подчинённом сервере.
-2. Используйте SSH key auth вместо пароля.
-3. Для перезагрузки разрешите только нужную команду через sudoers, например `/sbin/shutdown -r now`, без полного root-доступа.
-
-Если sudo на сервере требует пароль, KernvoxHub сначала пробует безопасный
-non-interactive путь (`sudo -n`). Для серверов, добавленных с SSH-паролем,
-есть fallback через `sudo -S`: пароль передаётся только в stdin SSH-команды и
-не попадает в shell-строку. Для key-only production всё равно настройте
-минимальный sudoers `NOPASSWD`. Это можно сделать из KernvoxHub без сохранения
-sudo-пароля:
-
-```bash
-kernvoxhub setup-reboot-sudo 1
-```
-
-Команда подключится по уже сохранённому SSH-ключу и, если sudo требует пароль,
-попросит его один раз только для записи `/etc/sudoers.d/kernvoxhub-reboot`.
-Эквивалентная запись:
+Для продакшна честно рекомендую отдельного пользователя и ключ вместо пароля. Для reboot достаточно разрешить только одну команду через sudoers:
 
 ```sudoers
 kernvox ALL=(root) NOPASSWD: /sbin/shutdown -r now, /usr/sbin/shutdown -r now, /usr/bin/systemctl reboot, /sbin/reboot, /usr/sbin/reboot
 ```
 
-Полезные команды:
+Настроить это можно прямо из KernvoxHub, не нужно руками лезть на сервер:
+
+```bash
+kernvoxhub setup-reboot-sudo 1
+```
+
+Если sudo требует пароль — спросит один раз и всё. Если sudo на сервере уже настроен без пароля (`sudo -n` работает) — команда просто тихо пройдёт.
+
+Другие команды которые пригодятся:
 
 ```bash
 kernvoxhub list-servers
 kernvoxhub test-server 1
 kernvoxhub metrics 1
-kernvoxhub setup-reboot-sudo 1
 kernvoxhub reboot-server 1 --yes
 ```
 
-## Перезагрузка сервера
-
-Через API:
+## Перезагрузка через API
 
 ```bash
 curl -X POST http://localhost/api/v1/servers/1/actions/reboot \
@@ -103,9 +81,9 @@ curl -X POST http://localhost/api/v1/servers/1/actions/reboot \
   -H "X-Action-Key: <server_action_token>"
 ```
 
-`X-Action-Key` берётся из `.env` переменной `SERVER_ACTION_TOKEN`. Если переменная не задана, destructive endpoints не выполняются: это fail-closed защита от случайного запуска без отдельного action-token.
+`X-Action-Key` — это значение `SERVER_ACTION_TOKEN` из `.env`. Если переменная не задана, endpoint просто откажет. Это намеренно: чтобы нельзя было случайно перезагрузить что-то при запуске без нормальной настройки.
 
-Ответ при принятой команде:
+Ответ когда команда принята:
 
 ```json
 {
@@ -119,7 +97,7 @@ curl -X POST http://localhost/api/v1/servers/1/actions/reboot \
 }
 ```
 
-История действий:
+Историю действий:
 
 ```bash
 curl http://localhost/api/v1/servers/1/actions \
@@ -128,29 +106,23 @@ curl http://localhost/api/v1/servers/1/actions \
 
 ## API
 
-Все непубличные endpoints требуют:
+Все endpoint'ы требуют `X-API-Key` в заголовке. Исключение — health check и документация (`/docs`, `/redoc`).
 
-```http
-X-API-Key: <api_token>
-```
-
-Основные endpoints:
-
-| Метод | Endpoint | Назначение |
+| Метод | Endpoint | Что делает |
 |---|---|---|
-| `GET` | `/api/v1/health` | Health check |
+| `GET` | `/api/v1/health` | Проверка живости |
 | `GET` | `/api/v1/servers` | Список серверов |
 | `POST` | `/api/v1/servers` | Добавить сервер |
 | `GET` | `/api/v1/servers/{id}` | Карточка сервера |
 | `PUT` | `/api/v1/servers/{id}` | Обновить сервер |
-| `DELETE` | `/api/v1/servers/{id}` | Деактивировать сервер |
+| `DELETE` | `/api/v1/servers/{id}` | Деактивировать |
 | `GET` | `/api/v1/servers/{id}/metrics` | Последние метрики |
 | `GET` | `/api/v1/servers/{id}/metrics/history` | История метрик |
-| `GET` | `/api/v1/servers/{id}/metrics/timeseries` | Агрегированная серия |
-| `POST` | `/api/v1/servers/{id}/actions/reboot` | Перезагрузка сервера |
+| `GET` | `/api/v1/servers/{id}/metrics/timeseries` | Агрегированный ряд |
+| `POST` | `/api/v1/servers/{id}/actions/reboot` | Перезагрузка |
 | `GET` | `/api/v1/servers/{id}/actions` | Аудит действий |
 
-Android endpoints:
+Для Android-клиента отдельные endpoint'ы с другим форматом ответа:
 
 | Метод | Endpoint |
 |---|---|
@@ -162,13 +134,7 @@ Android endpoints:
 
 ## Обновление
 
-После установки `kernvoxhub` сам проверяет наличие новой версии и предлагает обновиться:
-
-```bash
-kernvoxhub
-```
-
-Можно проверить и запустить обновление явно:
+После установки `kernvoxhub` сам проверяет новую версию при запуске и предлагает обновиться. Можно и явно:
 
 ```bash
 kernvoxhub check-update
@@ -177,9 +143,7 @@ kernvoxhub status
 kernvoxhub logs backend
 ```
 
-Обычный сценарий не требует выбирать ветки или коммиты. Updater проверяет опубликованную версию, обновляет файлы проекта, пересобирает контейнеры и ждёт health checks. Если в старом `.env` нет новых runtime-секретов, например `SERVER_ACTION_TOKEN`, updater добавит их сам.
-
-Для обслуживания без скачивания новой версии есть технический режим:
+Updater подтягивает новый код, пересобирает контейнеры и ждёт health check. Если в старом `.env` не хватает каких-то переменных — добавит сам. Если хочется просто пересобрать контейнеры без скачивания новой версии:
 
 ```bash
 kernvoxhub update --skip-git
@@ -187,21 +151,21 @@ kernvoxhub update --skip-git
 
 ## Конфигурация
 
-Главные переменные `.env`:
+Главные переменные в `.env`:
 
-| Переменная | Для чего нужна |
+| Переменная | Зачем |
 |---|---|
 | `POSTGRES_PASSWORD` | пароль PostgreSQL |
-| `API_TOKEN` | bootstrap API-токен |
-| `SERVER_ACTION_TOKEN` | отдельный ключ для destructive actions |
+| `API_TOKEN` | bootstrap-токен для API |
+| `SERVER_ACTION_TOKEN` | ключ для destructive actions |
 | `ENCRYPTION_KEY` | Fernet-ключ для шифрования SSH-секретов |
 | `REDIS_PASSWORD` | пароль Redis |
-| `INTERNAL_API_KEY` | ключ для внутренних записывающих endpoints |
-| `CORS_ORIGINS` | разрешённые origins |
+| `INTERNAL_API_KEY` | ключ для внутренних записывающих endpoint'ов |
+| `CORS_ORIGINS` | разрешённые origin'ы |
 | `COLLECTOR_INTERVAL` | интервал опроса серверов |
 | `DOMAIN`, `EMAIL` | домен и email для SSL |
 
-Не коммитьте `.env`, приватные ключи, сертификаты и дампы базы.
+`.env`, приватные ключи, сертификаты и дампы базы — всё это не коммитить.
 
 ## Разработка
 
@@ -212,19 +176,8 @@ docker compose up -d --build
 docker compose logs -f backend
 ```
 
-Тесты лежат в `backend/tests/` и разнесены по назначению:
-
-- `backend/tests/api/` - API и middleware;
-- `backend/tests/unit/` - чистые сервисы, парсеры, encryption, SSH helpers;
-- `backend/tests/cli/` - команды `python -m cli.main`;
-- `backend/tests/scripts/` - installer, updater и shell wrappers.
-
-Каждый тест содержит docstring с назначением сценария. При изменениях в SSH, auth, encryption, reboot или installer/update добавляйте регрессионные тесты рядом с затронутым поведением.
+Тесты в `backend/tests/` разбиты по назначению: `api/` — API и middleware, `unit/` — сервисы/парсеры/шифрование/SSH, `cli/` — CLI-команды, `scripts/` — installer, updater и shell-обёртки. Если меняешь что-то в SSH, auth, шифровании, reboot или installer — добавляй регрессионный тест рядом с затронутым поведением.
 
 ## Безопасность
 
-- SSH host key сохраняется при первом успешном подключении и затем проверяется при каждом новом подключении.
-- Пароли, приватные SSH-ключи и host key хранятся в базе зашифрованными через Fernet.
-- API закрыт `X-API-Key`, а destructive actions дополнительно закрываются `X-Action-Key`. Если `SERVER_ACTION_TOKEN` не настроен, destructive endpoints отказывают в выполнении.
-- Для reboot используйте отдельного SSH-пользователя и минимальные sudoers-права.
-- При смене host/port у сервера сохранённый host key сбрасывается, чтобы не доверять старому ключу для нового адреса.
+SSH host key сохраняется при первом успешном подключении и сверяется при каждом следующем. Пароли, приватные ключи и сам host key хранятся в базе зашифрованными. API закрыт `X-API-Key`, а destructive actions требуют ещё и `X-Action-Key`. Если `SERVER_ACTION_TOKEN` не настроен — endpoint откажет, это fail-closed поведение. При смене хоста или порта сервера сохранённый host key сбрасывается автоматически, чтобы не доверять старому ключу для нового адреса.
